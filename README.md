@@ -15,6 +15,12 @@ Two data sources, same dashboard:
 
 Neither one? It ships with a realistic sample so you can see everything first.
 
+> **Just want to know how much of your plan you've used right now?** Run
+> **`/usage`** inside Claude Code — that's the built-in command for current
+> plan and rate-limit consumption, and it's the right tool for that question.
+> Token Ledger answers a different one: *where* your tokens went over weeks or
+> months — per project, per model, per day — and what to change about it.
+
 ![token ledger](docs/preview.png)
 
 **[Live demo →](https://todd-father.github.io/token-ledger/)** — the full
@@ -258,6 +264,13 @@ getting from it.
 **Port 4319 already in use.** The server detects an existing instance and points at
 it instead of erroring. To restart: `lsof -ti:4319 | xargs kill`. To use another
 port: `PORT=8080 npm run serve`.
+
+**"Isn't this what `/usage` does?"** No — they answer different questions, and
+you'll likely want both. `/usage` (built into Claude Code) tells you how much of
+your plan you've consumed *right now*, so you know whether you're about to hit a
+limit. Token Ledger is the retrospective view: months of history, broken down per
+project, model, and day, with cost attribution and recommendations. Reach for
+`/usage` mid-session; reach for this when deciding what to change.
 
 ---
 
