@@ -43,6 +43,14 @@ npx token-ledger
 #   dashboard at http://localhost:4319, and opens it
 ```
 
+Until the package lands on the npm registry, run it straight from GitHub:
+
+```bash
+npx -y github:Todd-Father/token-ledger
+```
+
+*(npm 12+ blocks git packages by default — prefix with `npm_config_allow_git=true` there.)*
+
 Or from a clone:
 
 ```bash
