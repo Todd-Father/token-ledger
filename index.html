@@ -654,12 +654,16 @@
   </div>
 
   <div class="foot">
-    <span class="wire">Going live:</span> run <code>node scripts/fetch-usage.mjs</code> with an Admin key
-    (<code>sk-ant-admin01-…</code>) in <code>.env</code>. It pulls
-    <code>/usage_report/messages</code> + <code>/cost_report</code>, writes a gitignored <code>data.json</code>,
-    and this page picks it up automatically — the badge flips to <span style="color:var(--good)">Live data</span>.
-    With no key set it uses the bundled sample so everything still works. The Admin API needs an
-    <strong>organization account</strong> (individual accounts can create one free in Console → Settings). See the README.
+    <span class="wire">Seeing your own numbers:</span> run <code>node scripts/fetch-usage.mjs</code> —
+    it picks a source automatically and writes a gitignored <code>data.json</code> this page reads.
+    <strong>Use Claude&nbsp;Code?</strong> Nothing to configure: it reads your local sessions from
+    <code>~/.claude/projects</code> and the badge flips to
+    <span style="color:var(--good)">Claude Code data</span> (dollar figures are the list-price value of
+    those tokens — subscriptions aren't billed per token).
+    <strong>On the API?</strong> Put an Admin key (<code>sk-ant-admin01-…</code>, organization accounts only)
+    in <code>.env</code> to pull <code>/usage_report/messages</code> + <code>/cost_report</code> with real billed
+    cost — the badge reads <span style="color:var(--good)">Live data</span>.
+    With neither, you're seeing the bundled synthetic sample. See the README.
   </div>
 </div>
 

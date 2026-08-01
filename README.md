@@ -18,8 +18,7 @@ Neither one? It ships with a realistic sample so you can see everything first.
 ![token ledger](docs/preview.png)
 
 **[Live demo →](https://todd-father.github.io/token-ledger/)** — the full
-dashboard running on the synthetic sample. *(Activates once GitHub Pages is
-enabled for the repo: Settings → Pages → Source: GitHub Actions.)*
+dashboard running on the synthetic sample. Nothing to install.
 
 ---
 
@@ -37,35 +36,40 @@ This is the important part, so it's first:
 
 ## Quick start
 
-```bash
-npx token-ledger
-# → scans your Claude Code sessions (or uses the sample), serves the
-#   dashboard at http://localhost:4319, and opens it
-```
-
-Until the package lands on the npm registry, run it straight from GitHub:
+If you use **Claude Code**, this is the whole setup — no key, no config:
 
 ```bash
 npx -y github:Todd-Father/token-ledger
+# → scans ~/.claude/projects, serves the dashboard at
+#   http://localhost:4319, and opens it
 ```
 
-*(npm 12+ blocks git packages by default — prefix with `npm_config_allow_git=true` there.)*
+*(On npm 12+, prefix that with `npm_config_allow_git=true` — git packages are
+blocked by default. Once this is published to the registry, it's just
+`npx token-ledger`.)*
 
 Or from a clone:
 
 ```bash
-git clone <your-fork-url> token-ledger
+git clone https://github.com/Todd-Father/token-ledger.git
 cd token-ledger
-npm start
+npm start        # fetch + serve; then open http://localhost:4319
 ```
 
-Source selection is automatic: an Admin key in `.env` → org API data; no key
-but Claude Code on this machine → your local sessions; neither → the bundled
-sample (badge reads **Demo data**). Force a source with `--claude-code` or
-`--fixture`, or `npm run fetch:code`.
+**Which data you get is automatic:**
 
-> Installed via `npx`? Your data lives in `~/.token-ledger` (override with
-> `LEDGER_HOME`), so it survives npm cache cleanups. Put your `.env` there.
+| Situation | Source | Cost figures are |
+| --- | --- | --- |
+| Admin key in `.env` | Claude API, org-wide | **billed cost** from the Cost API |
+| No key, Claude Code on this machine | `~/.claude/projects` | **list-price value** (subscriptions aren't billed per token) |
+| Neither | bundled sample | synthetic |
+
+Force one with `npm run fetch:code` (or `--claude-code`) and `npm run
+fetch:fixture` (or `--fixture`).
+
+> Running via `npx`? Your data lives in `~/.token-ledger` (override with
+> `LEDGER_HOME`), so it survives npm cache cleanups — put your `.env` there
+> too. From a clone, everything stays in the repo directory.
 
 ---
 
@@ -114,9 +118,11 @@ whenever you want fresh numbers (data is available within ~5 min of an API call)
 ## What's in the dashboard
 
 **Overall**
-- **Usage value (list price)** — the authoritative figure from the Cost API: the
-  list-price value of tokens consumed. The dashboard trusts this over a hardcoded
+- **Usage value** — on API data, the authoritative figure from the Cost API: the
+  list-price value of tokens consumed. The dashboard trusts this over its own
   price table (which can be wildly off if you use models/rates it doesn't know).
+  On Claude Code data no such figure exists, so the tile reads **(EST.)** and
+  shows the price table's estimate.
 
   > **Credit vs. invoice:** the Cost API reports usage *value* at published rates,
   > not necessarily what you were charged. On a **prepaid-credit** account this value
@@ -138,8 +144,9 @@ whenever you want fresh numbers (data is available within ~5 min of an API call)
 - **Output ÷ input ratio** (flags context-heavy work that's prime for caching)
 - **Blended cost per million tokens**
 
-**Project level** — one row per Anthropic workspace, sortable, with inline cache-hit
-bars so the worst offenders read at a glance.
+**Project level** — one row per project (an Anthropic workspace on API data, a
+project directory on Claude Code data), sortable, with inline cache-hit bars so
+the worst offenders read at a glance.
 
 **Take action** — a recommendation engine that reads *your* current numbers and only
 surfaces the levers that apply, ranked by estimated dollar impact. Covers API cost
@@ -186,11 +193,13 @@ per-token invoice, every dollar figure is the **list-price value** of the
 tokens consumed (the same framing ccusage uses). Recommendations that only
 exist for API billing (Batch tier, workspace chargeback) are suppressed.
 
-Token-type fields from the API — `uncached_input_tokens`, `cache_read_input_tokens`,
+Token-type fields — `uncached_input_tokens`, `cache_read_input_tokens`,
 `cache_creation_input_tokens`, `output_tokens` — map 1:1 onto the chart stacks and
-every efficiency meter. The dashboard recomputes cost from tokens (using the prices in
-`fetch-usage.mjs`) so the caching/tier toggles can show live counterfactuals; the
-authoritative Cost API figure is also stored per project-day for reconciliation.
+every efficiency meter. The dashboard recomputes cost from tokens (using the embedded
+price table) so the caching/tier toggles can show live counterfactuals; on API data the
+authoritative Cost API figure is also stored per project-day, and every recommendation's
+savings estimate is rescaled by the billed÷estimated ratio so "$X saved" means $X off
+your real invoice.
 
 > **Pricing note:** per-model prices live in one place — `scripts/lib/pricing.mjs`,
 > with per-version entries (Opus 4.1 is priced 3× Opus 4.8, old Haiku differs from
@@ -210,6 +219,45 @@ fetch on a cadence — once daily is plenty:
 # crontab -e   — refresh every morning at 6am
 0 6 * * * cd /path/to/token-ledger && /usr/bin/node scripts/fetch-usage.mjs >> fetch.log 2>&1
 ```
+
+Append `--claude-code` to that command for the Claude Code source. Each fetch also
+appends to a long-term history file (`snapshots/history.jsonl` for API data,
+`snapshots/history-code.jsonl` for Claude Code), which powers the **Historical trend**
+chart — that outlives the API's lookback window, so the daily cron is what builds
+your long-run record.
+
+A one-command alias is handy too:
+
+```bash
+# ~/.zshrc
+alias ledger='(cd /path/to/token-ledger && node scripts/fetch-usage.mjs && node scripts/serve.mjs)'
+```
+
+---
+
+## Troubleshooting
+
+**Badge says "Demo data" when you expected your own.** The fetch found no Admin
+key *and* no Claude Code sessions. Check that `.env` sits next to `package.json`
+(or in `~/.token-ledger` when running via `npx`) and that the key starts with
+`sk-ant-admin01-`.
+
+**`API 401/403` on fetch.** The Usage & Cost API rejects normal API keys — it needs
+an **Admin** key, and only organization accounts can create one. See the section above.
+
+**"PRICE MAP DRIFT DETECTED" warning.** The cost recomputed from tokens diverged
+>20% from your actual bill, which usually means Anthropic changed prices or you're
+using a model that isn't in the table. Update `scripts/lib/pricing.mjs`; that one
+file feeds both the fetch and the dashboard.
+
+**Claude Code numbers look higher than you expected.** They're the *list-price
+value* of the tokens your subscription consumed — what the same work would cost on
+the API — not a bill. A subscription is flat-rate; this is the leverage you're
+getting from it.
+
+**Port 4319 already in use.** The server detects an existing instance and points at
+it instead of erroring. To restart: `lsof -ti:4319 | xargs kill`. To use another
+port: `PORT=8080 npm run serve`.
 
 ---
 

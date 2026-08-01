@@ -21,9 +21,14 @@ npm run serve     # → http://localhost:4319
 Then open **http://localhost:4319** in your browser. Press `Ctrl-C` in the
 terminal to stop the server.
 
-With no API key configured, `npm run fetch` writes the bundled sample fixture
-instead, so the dashboard still works end-to-end with demo data. See the
-[README](README.md) for how to add an Admin key for real data.
+`npm run fetch` picks its source automatically: an Admin key in `.env` pulls
+org-wide Claude API data; with no key it reads your local Claude Code sessions
+from `~/.claude/projects`; with neither it writes the bundled sample so the
+dashboard still works end-to-end. Force one with `npm run fetch:code` or
+`npm run fetch:fixture`. See the [README](README.md) for the details.
+
+No clone required, either — `npx -y github:Todd-Father/token-ledger` runs the
+whole thing (fetch, serve, open) and keeps your data in `~/.token-ledger`.
 
 ---
 
@@ -54,8 +59,11 @@ page in a browser when you want to look.
 0 6 * * * cd /path/to/token-ledger && /usr/bin/node scripts/fetch-usage.mjs >> fetch.log 2>&1
 ```
 
-On macOS you can use `launchd` instead if you prefer. Either way, this gives you
-always-current data without any hosting.
+Append `--claude-code` for the Claude Code source. On macOS you can use `launchd`
+instead if you prefer. Either way, this gives you always-current data without any
+hosting — and it's what accumulates the long-term history behind the
+**Historical trend** chart (`snapshots/`), which reaches further back than the
+API's own lookback window.
 
 ---
 
@@ -72,9 +80,11 @@ PORT=8080 npm run serve   # → http://localhost:8080
 
 ## Privacy notes
 
-- `data.json` (your fetched usage) and `.env` (your Admin key) are **gitignored**
-  by default — they are never committed.
+- `data.json` (your fetched usage), `snapshots/` (accumulated history), and
+  `.env` (your Admin key) are **gitignored** by default — never committed.
 - Do not commit or publish `data.json`. It contains your usage, cost, and
-  workspace names. If you add new data files, add them to `.gitignore` too.
+  workspace or project names. If you add new data files, gitignore them too.
+- The Claude Code scanner only ever **reads** `~/.claude/projects`; it never
+  writes to or modifies your session transcripts.
 - The dashboard is a single static HTML file with no external requests — no CDNs,
   fonts, or trackers. It works fully offline once served.
