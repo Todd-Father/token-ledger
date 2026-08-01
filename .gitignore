@@ -1,0 +1,14 @@
+# Secrets — never commit
+.env
+.env.local
+*.key
+
+# Your fetched usage data — private to you, never published
+data.json
+data.*.json
+snapshots/
+
+# Node
+node_modules/
+npm-debug.log*
+.DS_Store
