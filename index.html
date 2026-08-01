@@ -594,13 +594,6 @@
     </div>
   </div>
 
-  <!-- ================= HISTORICAL TREND ================= -->
-  <div class="card" id="trendCard" style="display:none">
-    <h2>Historical trend <span style="font-size:11px;color:var(--ink-3);font-weight:500" id="trendSpan"></span></h2>
-    <p class="desc">Daily billed cost since tracking began — outlasts whatever window is loaded above, from <code>snapshots/history.jsonl</code>.</p>
-    <div id="trendChart"></div>
-  </div>
-
   <!-- ================= ACTIONS / RECOMMENDATIONS ================= -->
   <div class="card act-card">
     <h2>Take action
@@ -1305,7 +1298,7 @@ function projectRollup(A){
   return A.projTotals.map(p=>{
     const input=p.fresh+p.cacheRead+p.cacheCreate;
     const total=input+p.output;
-    return { name:p.name, id:p.id, model:p.model, cost:p.cost, input, output:p.output, total,
+    return { name:p.name, model:p.model, cost:p.cost, input, output:p.output, total,
       fresh:p.fresh, cacheRead:p.cacheRead, cacheCreate:p.cacheCreate,
       hit: p.cacheRead/(input||1), io: p.output/(input||1) };
   }).sort((a,b)=>b.cost-a.cost);
@@ -1370,13 +1363,7 @@ function buildRecs(A){
         effort:"easy",
         proj: worst? `biggest win: ${worst.name}`:null,
         body:`Cache hit is ${(hit*100).toFixed(0)}% and ${cacheable.length} project${cacheable.length>1?'s are':' is'} context-heavy (low output÷input) — the ideal caching profile. Mark the unchanging head of your prompts (system instructions, tool defs, retrieved docs) with <code>cache_control</code>. Reads bill at ~10% of fresh input, and identical context also makes responses more consistent.`,
-        code: (worst && !worst.id)
-          ? `<span class="c-com">// WHERE: Claude Code — nothing to paste, it caches automatically</span>
-<span class="c-com">// This low hit rate usually means short, one-off sessions rather</span>
-<span class="c-com">// than a fixable setting. Reusing the same files/context across</span>
-<span class="c-com">// turns in one session raises this on its own.</span>`
-          : `<span class="c-com">// WHERE: In ${worst? worst.name : 'your'} API code, on the request you send most often</span>
-<span class="c-com">// HOW: mark the stable (unchanging) part of your prompt like this —</span>
+        code:`<span class="c-com">// last stable block before the variable part</span>
 {
   <span class="c-key">"type"</span>: <span class="c-str">"text"</span>,
   <span class="c-key">"text"</span>: <span class="c-str">"&lt;system + tools + retrieved docs&gt;"</span>,
@@ -1404,16 +1391,14 @@ function buildRecs(A){
       cat:"cost", tierCol:"--accent", kind:"cost", id:"batch-tier",
       docs:"https://platform.claude.com/docs/en/build-with-claude/batch-processing",
       verify:"Service tier filter shows a batch share above 0% after adoption",
-      fix:`<span class="c-com">// WHERE: your own backend code, not Claude Code (there's no "batch" button</span>
-<span class="c-com">// in the chat UI — this only applies where you're calling the API yourself)</span>
-<span class="c-com">// HOW: instead of one messages.create() call per job, submit them all at once —</span>
+      fix:`<span class="c-com">// submit jobs as one batch instead of N live calls (−50%)</span>
 const batch = await client.messages.batches.create({
   requests: jobs.map((j, i) => ({
     custom_id: \`job-\${i}\`,
     params: { model, max_tokens: 1024, messages: j }
   }))
 });
-<span class="c-com">// then poll client.messages.batches.retrieve(batch.id) until it's done (1-24h)</span>`,
+<span class="c-com">// poll client.messages.batches.retrieve(batch.id) until ended</span>`,
       title:"Move non-interactive jobs to Batch tier",
       impact: toReal(batchEst), impactCap:"save / window", effort:"easy",
       proj:"eval runs, backfills, scheduled summaries",
@@ -1434,14 +1419,8 @@ const batch = await client.messages.batches.create({
       cat:"cost", tierCol:"--accent", kind:"both", id:"right-size",
       docs:"https://platform.claude.com/docs/en/about-claude/models/overview",
       verify:"that project's $/Mtok drops toward the cheaper model's rate; spot-check 5 real outputs first",
-      fix: !p0.id
-        ? `<span class="c-com">// WHERE: Claude Code — interactive chat, not a code file</span>
-<span class="c-com">// HOW: Click the model selector at the top of the chat before you start typing</span>
-<span class="c-com">// Pick Haiku for classification/extraction/formatting; save Opus for hard reasoning</span>`
-        : `<span class="c-com">// WHERE: In your ${p0.name} code, wherever you call the API</span>
-<span class="c-com">// HOW: Paste this where you build the request, then swap in your own logic for isHardTask</span>
-const model = isHardTask ? "claude-opus-4-8" : "claude-haiku-4-5";
-const response = await client.messages.create({ model, /* ...rest of your call */ });`,
+      fix:`<span class="c-com">// try the cheaper model on easy calls; keep the strong one for hard ones</span>
+const model = isHardTask ? "claude-opus-4-8" : "claude-haiku-4-5";`,
       title:"Right-size the model where quality holds",
       impact: est, impactCap:"save / window", effort:"med",
       proj:`review: ${p0.name}`,
@@ -1451,21 +1430,14 @@ const response = await client.messages.create({ model, /* ...rest of your call *
 
   /* ---- QUALITY: output-heavy / capping ---- */
   if(io>0.8){
-    const outHog = projects.slice().sort((a,b)=>b.io-a.io)[0];
     recs.push({
       cat:"quality", tierCol:"--t-output", kind:"cost", id:"output-length",
       docs:"https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/overview",
       verify:"output ÷ input ratio in the Efficiency panel falls next window",
-      fix: (outHog && !outHog.id)
-        ? `<span class="c-com">// WHERE: Claude Code — nothing to paste, this is a prompting habit</span>
-<span class="c-com">// HOW: ask explicitly for brevity ("answer in 2 sentences, no preamble"),</span>
-<span class="c-com">// or add a standing note to CLAUDE.md: "keep responses concise by default"</span>`
-        : `<span class="c-com">// WHERE: In ${outHog? outHog.name : 'your'} API code</span>
-<span class="c-com">// HOW: cap the response and tell the model to be terse —</span>
+      fix:`<span class="c-com">// cap responses + ask for brevity in the system prompt</span>
 { max_tokens: 512, system: "Answer concisely. No preamble or recap." }`,
       title:"Rein in runaway output length",
       impact: null, impactCap:"output is 5× input price", effort:"easy",
-      proj: outHog? `worst: ${outHog.name}`:null,
       body:`Output÷input is ${io.toFixed(2)} — you're generating a lot per unit of context, and output tokens cost ~5× input. Set a deliberate <code>max_tokens</code>, ask for structured/terse formats where you don't need prose, and stop paying for padding. Tighter output is usually <em>better</em> output.`,
     });
   }
@@ -1702,75 +1674,6 @@ function setSourceBadge(src, generatedAt){
 }
 
 /* ---------- bootstrap: prefer live data.json, fall back to synthetic ---------- */
-function renderHistoryTrend(rows){
-  const card = document.getElementById("trendCard");
-  if(!rows || rows.length < 3){ card.style.display="none"; return; }
-  card.style.display="";
-  rows = rows.slice().sort((a,b)=>a.date.localeCompare(b.date));
-  document.getElementById("trendSpan").textContent =
-    `${rows.length} day${rows.length>1?'s':''} tracked \u00b7 since ${rows[0].date}`;
-
-  const host = document.getElementById("trendChart");
-  const W=1100, H=200, padL=48, padR=8, padT=10, padB=24;
-  const iw=W-padL-padR, ih=H-padT-padB;
-  const n = rows.length;
-  const ymax = Math.max(...rows.map(r=>r.costUSD||0), 1) * 1.15;
-  const x = i => padL + (n===1 ? iw/2 : (iw*i/(n-1)));
-  const y = v => padT + ih - (v/ymax)*ih;
-
-  let grid = "";
-  for(let i=0;i<=2;i++){
-    const gy = padT + ih*i/2;
-    const gv = ymax*(1-i/2);
-    grid += `<line x1="${padL}" y1="${gy}" x2="${W-padR}" y2="${gy}" stroke="var(--line-soft)" stroke-width="1"/>`;
-    grid += `<text x="${padL-6}" y="${gy+3}" text-anchor="end" font-size="10" fill="var(--ink-3)">$${gv.toFixed(gv<10?1:0)}</text>`;
-  }
-
-  let path = "", seg = false, dots = "";
-  rows.forEach((r,i)=>{
-    const cx=x(i), cy=y(r.costUSD||0);
-    path += (seg? "L":"M") + cx.toFixed(1) + " " + cy.toFixed(1) + " ";
-    seg = true;
-    dots += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="2.5" fill="var(--accent)" data-date="${r.date}" data-cost="${(r.costUSD||0).toFixed(2)}" class="trend-dot"/>`;
-  });
-
-  const labelIdx = n===1 ? [0] : [0, Math.floor((n-1)/2), n-1];
-  let xlabels = "";
-  labelIdx.forEach(i=>{
-    xlabels += `<text x="${x(i).toFixed(1)}" y="${H-6}" text-anchor="middle" font-size="10" fill="var(--ink-3)">${rows[i].date}</text>`;
-  });
-
-  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px" id="trendSvg">
-    ${grid}
-    <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2"/>
-    ${dots}
-    ${xlabels}
-  </svg>
-  <div class="tip" id="trendTip" style="display:none"></div>`;
-
-  const tip = document.getElementById("trendTip");
-  host.querySelectorAll(".trend-dot").forEach(dot=>{
-    dot.addEventListener("mouseenter", e=>{
-      tip.style.display="block";
-      tip.innerHTML = `<b>${dot.dataset.date}</b><br>$${dot.dataset.cost}`;
-      const r = host.getBoundingClientRect();
-      tip.style.left = (e.clientX - r.left + 10) + "px";
-      tip.style.top  = (e.clientY - r.top - 10) + "px";
-    });
-    dot.addEventListener("mouseleave", ()=>{ tip.style.display="none"; });
-  });
-}
-
-async function loadHistory(){
-  try{
-    const res = await fetch("./snapshots/history.jsonl", { cache:"no-store" });
-    if(!res.ok) return renderHistoryTrend(null);
-    const text = await res.text();
-    const rows = text.split("\n").filter(l=>l.trim()).map(l=>{ try{ return JSON.parse(l); }catch{ return null; } }).filter(Boolean);
-    renderHistoryTrend(rows);
-  }catch(e){ renderHistoryTrend(null); }
-}
-
 async function bootstrap(){
   try{
     const res = await fetch("./data.json", { cache: "no-store" });
@@ -1793,5 +1696,4 @@ async function bootstrap(){
   render();
 }
 bootstrap();
-loadHistory();
 </script>
