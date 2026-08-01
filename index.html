@@ -239,9 +239,11 @@
   /* chart */
   .chart-host { position: relative; }
   svg { display:block; width: 100%; height: auto; overflow: visible; }
-  .axis-lbl { font-size: 9.5px; fill: var(--ink-3); font-family: var(--mono); }
-  .bar-seg { transition: opacity .12s; }
-  .bar-seg.dim { opacity: .18; }
+  .axis-lbl { font-size: 10px; fill: var(--ink-2); font-family: var(--mono); }
+  .bar-seg { transition: opacity .15s; }
+  .bar-seg.dim { opacity: .15; }
+  .lg { cursor: default; padding: 2px 4px; border-radius: 5px; transition: background .12s; }
+  .lg:hover, .lg:focus, .lg.lg-active { background: var(--panel-2); outline: none; }
   .tip {
     position: absolute; pointer-events: none; z-index: 5; opacity: 0; transform: translateY(4px);
     transition: opacity .1s, transform .1s;
@@ -777,7 +779,7 @@ function aggregate(){
   }));
 
   win.forEach(day=>{
-    const d = { label: dayLabel(day), fresh:0,cacheRead:0,cacheCreate:0,output:0, cost:0,
+    const d = { label: dayLabel(day), weekday: day.weekday, fresh:0,cacheRead:0,cacheCreate:0,output:0, cost:0,
                 byModel:{}, byProject:{}, byEnv:{Dev:0,Prod:0}, devCost:0, prodCost:0 };
     day.projs.forEach(pd=>{
       const { cost, tokens } = projDayCost(pd, S.tier, S.caching, S.env);
@@ -1056,14 +1058,21 @@ function renderChart(A){
   const bw = iw/n * 0.66;
   const gap = iw/n;
 
-  // y grid ticks
+  let weekendBands = "";
+  days.forEach((d,i)=>{
+    if(!d.weekday){
+      const x = padL + gap*i;
+      weekendBands += `<rect x="${x.toFixed(1)}" y="${padT}" width="${gap.toFixed(1)}" height="${ih}" fill="${cssvar('--panel-2')}" opacity="0.55"/>`;
+    }
+  });
   const ticks=4;
   let grid="";
   for(let i=0;i<=ticks;i++){
     const yv=ymax*i/ticks;
     const y=padT+ih-(yv/ymax)*ih;
     const lbl = S.metric==="cost" ? fmt$(yv) : fmtTok(yv);
-    grid+=`<line x1="${padL}" x2="${W-padR}" y1="${y}" y2="${y}" stroke="${cssvar('--line-soft')}" stroke-width="1"/>
+    const isBase = i===0;
+    grid+=`<line x1="${padL}" x2="${W-padR}" y1="${y}" y2="${y}" stroke="${cssvar(isBase?'--line':'--line-soft')}" stroke-width="${isBase?1.4:1}"/>
            <text x="${padL-6}" y="${y+3}" text-anchor="end" class="axis-lbl">${lbl}</text>`;
   }
   // budget line
@@ -1075,43 +1084,68 @@ function renderChart(A){
         fill="${cssvar('--crit')}">daily budget ${fmt$(dailyBudget)}</text>`;
   }
 
-  // bars
-  let bars="";
+  let bars="", clips="";
+  let prevMonth = null;
   days.forEach((d,i)=>{
     const x = padL + gap*i + (gap-bw)/2;
+    const total = seriesDefs.reduce((s,sd)=>s+val(d,sd.key),0);
+    const stackH = Math.max(0.6, (total/ymax)*ih);
+    const stackTop = padT+ih-stackH;
+    const clipId = `barclip${i}`;
+    clips += `<clipPath id="${clipId}"><rect x="${x.toFixed(1)}" y="${stackTop.toFixed(1)}" width="${bw.toFixed(1)}" height="${(stackH+2).toFixed(1)}" rx="3"/></clipPath>`;
     let yCursor = padT+ih;
+    let segHTML = "";
     seriesDefs.forEach(sd=>{
       const v=val(d,sd.key);
       if(v<=0) return;
       const hh=(v/ymax)*ih;
       yCursor-=hh;
-      bars+=`<rect class="bar-seg" data-day="${i}" x="${x.toFixed(1)}" y="${yCursor.toFixed(1)}"
-        width="${bw.toFixed(1)}" height="${Math.max(0.6,hh).toFixed(1)}" fill="${sd.color}"
-        rx="1.5"></rect>`;
+      segHTML+=`<rect class="bar-seg" data-day="${i}" data-key="${sd.key}" x="${x.toFixed(1)}" y="${yCursor.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0.6,hh).toFixed(1)}" fill="${sd.color}"></rect>`;
     });
-    // x labels: show ~7
-    if(n<=14 || i%Math.ceil(n/10)===0 || i===n-1){
-      bars+=`<text x="${(x+bw/2).toFixed(1)}" y="${H-8}" text-anchor="middle" class="axis-lbl">${d.label.d}</text>`;
+    bars += `<g clip-path="url(#${clipId})">${segHTML}</g>`;
+    const showLabel = n<=14 || i%Math.ceil(n/10)===0 || i===n-1;
+    if(showLabel){
+      const isNewMonth = prevMonth !== null && prevMonth !== d.label.m;
+      const lbl = (i===0 || isNewMonth) ? `${d.label.m} ${d.label.d}` : `${d.label.d}`;
+      bars+=`<text x="${(x+bw/2).toFixed(1)}" y="${H-8}" text-anchor="middle" class="axis-lbl"${isNewMonth?' font-weight="700"':''}>${lbl}</text>`;
     }
+    if(showLabel) prevMonth = d.label.m;
   });
-  // month tick at start
-  const firstL=days[0].label, lastL=days[n-1].label;
-  bars+=`<text x="${padL}" y="${H-8}" text-anchor="start" class="axis-lbl" opacity="0" >${firstL.m}</text>`;
+  {
+    const lastX = padL + gap*(n-1) + gap/2;
+    bars += `<text x="${lastX.toFixed(1)}" y="${padT-1}" text-anchor="middle" class="axis-lbl" opacity="0.75" font-style="italic">latest</text>`;
+  }
 
   host.innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily ${S.metric} stacked chart">
-    ${grid}${bars}</svg>`;
+    <defs>${clips}</defs>
+    ${weekendBands}${grid}${bars}</svg>`;
 
   CHART_STATE={ days, seriesDefs, val };
 
-  // legend with totals
   const legHost=document.getElementById("legend");
   legHost.innerHTML = seriesDefs.map(sd=>{
     const tot=days.reduce((s,d)=>s+val(d,sd.key),0);
     const disp = S.metric==="cost"?fmt$(tot):fmtTok(tot);
-    return `<span class="lg" data-key="${sd.key}">
+    return `<span class="lg" data-key="${sd.key}" tabindex="0">
       <span class="sw" style="background:${sd.color}"></span>${sd.label}
       <span class="lg-val">${disp}</span></span>`;
   }).join("");
+
+  legHost.querySelectorAll(".lg").forEach(item=>{
+    const key = item.dataset.key;
+    const highlight = on=>{
+      item.classList.toggle("lg-active", on);
+      const svg = document.querySelector("#chart svg");
+      if(!svg) return;
+      svg.querySelectorAll(".bar-seg").forEach(seg=>{
+        seg.classList.toggle("dim", on && seg.dataset.key !== key);
+      });
+    };
+    item.addEventListener("mouseenter", ()=>highlight(true));
+    item.addEventListener("mouseleave", ()=>highlight(false));
+    item.addEventListener("focus", ()=>highlight(true));
+    item.addEventListener("blur", ()=>highlight(false));
+  });
 
   wireChartHover();
   document.getElementById("chartTitle").textContent =
