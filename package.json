@@ -20,7 +20,7 @@
     "url": "git+https://github.com/Todd-Father/token-ledger.git"
   },
   "scripts": {
-    "test": "node --test 'test/*.test.mjs'",
+    "test": "node --test test/*.test.mjs",
     "fetch": "node scripts/fetch-usage.mjs",
     "fetch:code": "node scripts/fetch-usage.mjs --claude-code",
     "fetch:fixture": "node scripts/fetch-usage.mjs --fixture",
