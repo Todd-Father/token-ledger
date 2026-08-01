@@ -51,7 +51,7 @@ const opt = (name, def) => {
  */
 const PRICE = {
   "claude-opus-4-8":  { in: 5,  read: 0.50, write: 6.25,  out: 25 },
-  "claude-sonnet-5":  { in: 2,  read: 0.20, write: 2.50,  out: 10 }, // through 2026-08-31
+  "claude-sonnet-5":  { in: 3,  read: 0.30, write: 3.75,  out: 15 }, // billing-verified 2026-07-31
   "claude-haiku-4-5": { in: 1,  read: 0.10, write: 1.25,  out: 5  },
   "claude-fable-5":   { in: 10, read: 1.00, write: 12.50, out: 50 },
 };
