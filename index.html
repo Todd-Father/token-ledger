@@ -1855,13 +1855,23 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", ()=>{ if
 
 /* ---------- data source badge ---------- */
 const MAST_SUB_API = 'Claude API usage &amp; efficiency · <code>/v1/organizations/usage_report</code> + <code>/cost_report</code>';
-function setSourceBadge(src, generatedAt){
+function setSourceBadge(src, generatedAt, demo){
   const b=document.getElementById("srcBadge");
   if(!b) return;
   // reset the subtitle each time — switching sources must not leave the
   // previous source's wording in the masthead
   const sub0=document.getElementById("mastSub");
   if(sub0 && src!=="claude-code") sub0.innerHTML = MAST_SUB_API;
+  // The public demo carries real-shaped fixtures in both source slots so the
+  // switcher works — but the numbers are synthetic and must never be labelled
+  // as anyone's real usage.
+  if(demo){
+    b.textContent = src==="claude-code" ? "Demo · Claude Code" : "Demo · Claude API";
+    b.className="badge-mock";
+    b.title = "Synthetic sample data matching the real schema — not real usage. Run the fetch locally to see your own numbers.";
+    if(sub0 && src==="claude-code") sub0.innerHTML = 'Claude Code usage &amp; efficiency · <code>~/.claude/projects</code> · local session transcripts';
+    return;
+  }
   if(src==="live"){
     b.textContent = "Live data";
     b.className="badge-mock badge-live";
@@ -2000,7 +2010,12 @@ function renderComparison(){
 
   const apiTot = payloadTotal(api), codeTot = payloadTotal(code);
   const ratio = apiTot > 0 ? codeTot/apiTot : 0;
-  const span = p => `${p.DAYS}d · ${p.days[0].date} → ${p.days[p.days.length-1].date}`;
+  // The synthetic API fixture carries no dates (it's day-indexed), so only
+  // show a range when both endpoints actually exist.
+  const span = p => {
+    const a=p.days[0].date, b=p.days[p.days.length-1].date;
+    return `${p.DAYS}d${(a&&b) ? ` · ${a} → ${b}` : ""}`;
+  };
 
   strip.innerHTML = `
     <div class="cmp-side">
@@ -2030,7 +2045,7 @@ function applySource(src){
   try{ localStorage.setItem(SRC_PREF_KEY, src); }catch{}
   document.querySelectorAll("#srcSwitch button").forEach(b=>
     b.setAttribute("aria-pressed", b.dataset.src===src ? "true" : "false"));
-  setSourceBadge(src, payload.generatedAt);
+  setSourceBadge(src, payload.generatedAt, payload.demo === true);
   render();
   loadHistory(src);
 }

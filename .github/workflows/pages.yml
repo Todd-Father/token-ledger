@@ -28,16 +28,28 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Build demo site (sample fixture only)
+      - name: Build demo site (synthetic fixtures only)
         run: |
           mkdir -p _site
           cp index.html _site/
           node -e "
             const fs = require('fs');
-            const f = JSON.parse(fs.readFileSync('sample.data.json', 'utf8'));
-            f.source = 'fixture';
-            f.generatedAt = new Date().toISOString();
-            fs.writeFileSync('_site/data.json', JSON.stringify(f));
+            const stamp = new Date().toISOString();
+            // Claude API fixture -> the active view + the API source slot
+            const api = JSON.parse(fs.readFileSync('sample.data.json', 'utf8'));
+            api.source = 'fixture';
+            api.generatedAt = stamp;
+            fs.writeFileSync('_site/data.json', JSON.stringify(api));
+            // demo:true keeps the badge honest — both slots are synthetic, so
+            // the page must never label them as real usage
+            const apiSrc = { ...api, source: 'live', demo: true };
+            fs.writeFileSync('_site/data.api.json', JSON.stringify(apiSrc));
+            // Claude Code fixture -> the second source slot, so the demo can
+            // show the switcher and the API-vs-Claude-Code comparison
+            const code = JSON.parse(fs.readFileSync('sample.code.data.json', 'utf8'));
+            code.generatedAt = stamp;
+            code.demo = true;
+            fs.writeFileSync('_site/data.code.json', JSON.stringify(code));
           "
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

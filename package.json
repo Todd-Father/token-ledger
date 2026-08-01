@@ -12,6 +12,7 @@
     "scripts/",
     "index.html",
     "sample.data.json",
+    "sample.code.data.json",
     "DEPLOYMENT.md",
     "docs/preview.png"
   ],

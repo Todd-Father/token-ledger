@@ -34,6 +34,27 @@ test("index.html inline price fallback matches scripts/lib/pricing.mjs", () => {
   }
 });
 
+test("committed Claude Code fixture has the subscription shape the demo needs", () => {
+  const f = JSON.parse(readFileSync(join(ROOT, "sample.code.data.json"), "utf8"));
+  assert.equal(f.source, "claude-code");
+  assert.ok(f.days.length > 10, "should cover a meaningful window");
+  for (const [model, p] of Object.entries(f.prices)) {
+    assert.deepEqual(p, PRICE[model], `fixture price for "${model}" drifted — regenerate with: node scripts/gen-fixture.mjs`);
+  }
+  for (const d of f.days) {
+    assert.equal(d.actualCostDay, null, "subscription data has no billed cost");
+    assert.ok(d.estCostDay > 0, "every day needs a list-price estimate");
+    assert.ok(d.date, "Claude Code days must carry dates (trend + history rely on them)");
+    for (const p of d.projs) {
+      assert.equal(p.id, null, "local project dirs are not API workspaces");
+      assert.equal(p.actualCost, null);
+      assert.deepEqual(p.env, { dev: 1, prod: 0 });
+      assert.ok(p.tok.cacheCreate1h >= 0 && p.tok.cacheCreate1h <= p.tok.cacheCreate + 1e-9,
+        "1h cache writes are a subset of total cache writes");
+    }
+  }
+});
+
 test("committed sample fixture embeds the current price table", () => {
   const fixture = JSON.parse(readFileSync(join(ROOT, "sample.data.json"), "utf8"));
   assert.ok(fixture.prices, "sample.data.json should embed `prices` — regenerate with: node scripts/gen-fixture.mjs");
