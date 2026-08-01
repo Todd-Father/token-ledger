@@ -12,6 +12,9 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, normalize } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+// User data (data.json, snapshots/) may live outside the package — see
+// LEDGER_HOME in fetch-usage.mjs. Assets always come from the package.
+const HOME = process.env.LEDGER_HOME || ROOT;
 const PORT = Number(process.env.PORT || 4319);
 const TYPES = { ".html": "text/html; charset=utf-8", ".json": "application/json", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css" };
 
@@ -19,11 +22,17 @@ const server = createServer(async (req, res) => {
   try {
     let rel = decodeURIComponent(req.url.split("?")[0]);
     if (rel === "/") rel = "/index.html";
-    // prevent path traversal
-    const path = normalize(join(ROOT, rel));
-    if (!path.startsWith(ROOT)) { res.writeHead(403); return res.end("forbidden"); }
-    const ext = "." + path.split(".").pop();
-    const body = await readFile(path);
+    // data files resolve from HOME first (falling back to the package for the
+    // bundled sample); everything else is served from the package root.
+    const isData = rel === "/data.json" || rel.startsWith("/snapshots/");
+    const bases = isData && HOME !== ROOT ? [HOME, ROOT] : [ROOT];
+    let body = null, ext = "." + rel.split(".").pop();
+    for (const base of bases) {
+      const path = normalize(join(base, rel));
+      if (!path.startsWith(base)) { res.writeHead(403); return res.end("forbidden"); }
+      try { body = await readFile(path); break; } catch { /* try next base */ }
+    }
+    if (body == null) throw new Error("not found");
     res.writeHead(200, { "content-type": TYPES[ext] || "application/octet-stream", "cache-control": "no-store" });
     res.end(body);
   } catch {

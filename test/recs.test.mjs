@@ -153,6 +153,31 @@ test("recs rank dollar-quantified items first", () => {
     "every $-quantified rec should sort before qualitative ones");
 });
 
+test("Claude Code data suppresses per-token billing recs that don't apply to subscriptions", () => {
+  const api = runRecs();
+  assert.ok(api.recs.some((r) => r.id === "batch-tier"), "batch rec should fire for API data");
+  const code = runRecs({}, 'DATA.source = "claude-code";');
+  const ids = code.recs.map((r) => r.id);
+  assert.ok(!ids.includes("batch-tier"), "no Batch tier on subscription usage");
+  assert.ok(!ids.includes("chargeback"), "no workspace chargeback on local Claude Code data");
+  const alert = code.recs.find((r) => r.id === "spend-alert");
+  if (alert) assert.equal(alert.applied, true, "anomaly alert is built into the scanner");
+});
+
+test("projDayCost prices 1-hour cache writes at 2× input when the split is present", () => {
+  ctx.__fixture = fixture();
+  vm.runInContext(`
+    DATA = __fixture; DATA.prices = null;
+    const base = { model: "claude-opus-4-8",
+      tok: { fresh: 0, cacheRead: 0, cacheCreate: 1, cacheCreate1h: 0, output: 0 },
+      tiers: { standard: 1, batch: 0, priority: 0 } };
+    __out.c5m = projDayCost(base, "all", true, "all").cost;
+    __out.c1h = projDayCost({ ...base, tok: { ...base.tok, cacheCreate1h: 1 } }, "all", true, "all").cost;
+  `, ctx);
+  assert.ok(Math.abs(ctx.__out.c5m - 6.25) < 1e-9); // 1.25 × $5
+  assert.ok(Math.abs(ctx.__out.c1h - 10) < 1e-9);   // 2.00 × $5
+});
+
 test("live pricing uses the table embedded in data.json over the inline fallback", () => {
   ctx.__fixture = fixture();
   vm.runInContext(`

@@ -19,13 +19,19 @@ import { existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { PRICE, PRICE_META, normalizeModel, priceFor } from "./lib/pricing.mjs";
+import { colorFor } from "./lib/palette.mjs";
+import { scanClaudeCode, foldClaudeCode } from "./lib/claude-code.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
+// Where user data (.env, data.json, snapshots/) lives. Defaults to the repo
+// root for cloned checkouts; the npx CLI (bin/token-ledger.mjs) points it at
+// ~/.token-ledger so data survives npx cache churn.
+const HOME = process.env.LEDGER_HOME || ROOT;
 
 /* ---------- tiny .env loader (no dependency) ---------- */
 async function loadEnv() {
-  const p = join(ROOT, ".env");
+  const p = join(HOME, ".env");
   if (!existsSync(p)) return;
   const txt = await readFile(p, "utf8");
   for (const line of txt.split("\n")) {
@@ -52,11 +58,7 @@ const opt = (name, def) => {
  * main() warns if those numbers drift from real billing.
  */
 
-/* ---------- palette assignment for projects (stable by name) ---------- */
-const PALETTE = ["#c1852c", "#2f8f6e", "#2f6f8f", "#9a5bc4", "#c9524f", "#4a9d7f", "#d98b4a", "#7c6ff0"];
-function colorFor(idx, isDefault) {
-  return isDefault ? "#82869a" : PALETTE[idx % PALETTE.length];
-}
+/* palette lives in scripts/lib/palette.mjs — shared with the Claude Code adapter */
 
 const API = "https://api.anthropic.com/v1/organizations";
 const HEADERS = () => ({
@@ -401,9 +403,9 @@ function checkSpendAnomaly(data) {
    looks back so far; this upserts one row per day into snapshots/history.jsonl
    (gitignored), keyed by date, so long-term history accumulates locally.
    ============================================================ */
-async function updateHistory(data) {
-  const dir = join(ROOT, "snapshots");
-  const file = join(dir, "history.jsonl");
+async function updateHistory(data, { file: fileName = "history.jsonl", costOf = (d) => d.actualCostDay } = {}) {
+  const dir = join(HOME, "snapshots");
+  const file = join(dir, fileName);
   await mkdir(dir, { recursive: true });
   const byDate = new Map();
   if (existsSync(file)) {
@@ -416,7 +418,7 @@ async function updateHistory(data) {
     if (!d.date) continue;
     byDate.set(d.date, {
       date: d.date,
-      costUSD: d.actualCostDay,
+      costUSD: costOf(d),
       tok: d.projs.reduce((a, p) => ({
         fresh: a.fresh + p.tok.fresh, cacheRead: a.cacheRead + p.tok.cacheRead,
         cacheCreate: a.cacheCreate + p.tok.cacheCreate, output: a.output + p.tok.output,
@@ -426,7 +428,7 @@ async function updateHistory(data) {
   }
   const rows = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
   await writeFile(file, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
-  console.log(`✓ History: ${rows.length} days accumulated in snapshots/history.jsonl`);
+  console.log(`✓ History: ${rows.length} days accumulated in snapshots/${fileName}`);
 }
 
 const num = (v) => (v == null ? 0 : Number(v) || 0);
@@ -437,28 +439,66 @@ const shortWs = (id) => (typeof id === "string" && id.length > 16 ? id.slice(0, 
 /* ============================================================
    MAIN
    ============================================================ */
+async function writeFixture(outPath) {
+  const fixture = await readFile(join(ROOT, "sample.data.json"), "utf8");
+  const parsed = JSON.parse(fixture);
+  parsed.source = "fixture";
+  parsed.generatedAt = new Date().toISOString();
+  parsed.prices = parsed.prices || PRICE;
+  parsed.priceMeta = parsed.priceMeta || PRICE_META;
+  await writeFile(outPath, JSON.stringify(parsed));
+  console.log(`✓ Wrote ${outPath} (${parsed.DAYS} days, sample data).`);
+  console.log("  Open index.html to view.");
+}
+
 async function main() {
   await loadEnv();
   const days = Number(opt("days", process.env.LEDGER_DAYS || 90));
   const key = process.env.ANTHROPIC_ADMIN_KEY;
-  const outPath = join(ROOT, "data.json");
+  if (HOME !== ROOT) await mkdir(HOME, { recursive: true });
+  const outPath = join(HOME, "data.json");
 
-  if (flag("fixture") || !key) {
-    if (!flag("fixture")) {
-      console.log("• No ANTHROPIC_ADMIN_KEY set — using the bundled sample fixture.");
-      console.log("  (Set an Admin key in .env to pull your real usage. Needs an org account.)");
-    } else {
-      console.log("• --fixture: writing the bundled sample instead of calling the API.");
+  if (flag("fixture")) {
+    console.log("• --fixture: writing the bundled sample instead of reading any real data.");
+    await writeFixture(outPath);
+    return;
+  }
+
+  // Claude Code source: explicit via --claude-code, or the automatic default
+  // when there's no Admin key but this machine has local Claude Code sessions.
+  if (flag("claude-code") || !key) {
+    const entries = await scanClaudeCode({ days });
+    if (entries.length) {
+      if (!flag("claude-code")) {
+        console.log("• No ANTHROPIC_ADMIN_KEY set — reading your local Claude Code sessions instead.");
+        console.log("  (~/.claude/projects — nothing leaves your machine. Set an Admin key for org-wide API data.)");
+      } else {
+        console.log("• --claude-code: reading local sessions from ~/.claude/projects.");
+      }
+      const data = foldClaudeCode(entries, { days });
+      if (!data.DAYS) {
+        console.warn("⚠ Found session files but no usage inside this window. Nothing written.");
+        return;
+      }
+      await writeFile(outPath, JSON.stringify(data));
+      // No invoice exists for subscription usage — anomaly/history run on the
+      // list-price estimate instead of billed cost.
+      checkSpendAnomaly({ days: data.days.map((d) => ({ ...d, actualCostDay: d.estCostDay })) });
+      await updateHistory(data, { file: "history-code.jsonl", costOf: (d) => d.estCostDay });
+      const projCount = new Set(data.days.flatMap((d) => d.projs.map((p) => p.name))).size;
+      console.log(`✓ Wrote ${outPath} (${data.DAYS} days, ${projCount} projects of Claude Code usage).`);
+      console.log("  Dollar figures are list-price value of the tokens — subscription plans aren't billed per token.");
+      console.log("  Open index.html to view.");
+      return;
     }
-    const fixture = await readFile(join(ROOT, "sample.data.json"), "utf8");
-    const parsed = JSON.parse(fixture);
-    parsed.source = "fixture";
-    parsed.generatedAt = new Date().toISOString();
-    parsed.prices = parsed.prices || PRICE;
-    parsed.priceMeta = parsed.priceMeta || PRICE_META;
-    await writeFile(outPath, JSON.stringify(parsed));
-    console.log(`✓ Wrote ${outPath} (${parsed.DAYS} days, sample data).`);
-    console.log("  Open index.html to view.");
+    if (flag("claude-code")) {
+      console.error("✗ --claude-code: no Claude Code session data found in ~/.claude/projects.");
+      process.exitCode = 1;
+      return;
+    }
+    console.log("• No ANTHROPIC_ADMIN_KEY set and no local Claude Code sessions found — using the bundled sample.");
+    console.log("  (Set an Admin key in .env for org API data, or use Claude Code and re-run.)");
+    await writeFixture(outPath);
     return;
   }
 
@@ -496,7 +536,9 @@ async function main() {
 }
 
 // Run only when executed directly (node scripts/fetch-usage.mjs), not when
-// imported by the test suite.
+// imported by the test suite or the CLI (which calls main() itself).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main();
 }
+
+export { main };

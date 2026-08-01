@@ -1,12 +1,28 @@
 {
   "name": "token-ledger",
-  "version": "1.0.0",
-  "description": "A self-hosted dashboard for Claude API token usage, cost, per-project breakdown, and efficiency recommendations — powered by the Anthropic Usage & Cost Admin API.",
+  "version": "1.1.0",
+  "description": "Local-first dashboard for Claude token usage and cost — reads your Claude Code sessions (no key needed) or the Anthropic Usage & Cost Admin API, with per-project breakdowns and tunable efficiency recommendations.",
   "type": "module",
   "license": "MIT",
+  "bin": {
+    "token-ledger": "bin/token-ledger.mjs"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "index.html",
+    "sample.data.json",
+    "DEPLOYMENT.md",
+    "docs/preview.png"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Todd-Father/token-ledger.git"
+  },
   "scripts": {
     "test": "node --test 'test/*.test.mjs'",
     "fetch": "node scripts/fetch-usage.mjs",
+    "fetch:code": "node scripts/fetch-usage.mjs --claude-code",
     "fetch:fixture": "node scripts/fetch-usage.mjs --fixture",
     "fixture:gen": "node scripts/gen-fixture.mjs",
     "serve": "node scripts/serve.mjs",
@@ -17,6 +33,7 @@
   },
   "keywords": [
     "claude",
+    "claude-code",
     "anthropic",
     "llm",
     "usage",

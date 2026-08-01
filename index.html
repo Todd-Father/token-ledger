@@ -444,7 +444,7 @@
   <header class="mast">
     <div>
       <h1><span class="glyph"></span> Token Ledger</h1>
-      <div class="sub">
+      <div class="sub" id="mastSub">
         Claude API usage &amp; efficiency · <code>/v1/organizations/usage_report</code> +
         <code>/cost_report</code>
       </div>
@@ -782,7 +782,12 @@ function projDayCost(pd, tierFilter, cachingOn, envFilter){
 
   const frac = tierFrac * envFrac;
   const f=fresh*frac, cr=cacheRead*frac, cc=cacheCreate*frac, o=output*frac;
-  const cost = (f*price.in + cr*price.read + cc*price.write + o*price.out) * tierMul;
+  // 1-hour cache writes bill at 2× input (vs 1.25× for 5-minute = price.write).
+  // Claude Code data carries the split (tok.cacheCreate1h); blended multiplier
+  // = 1 + 0.6 × (1h share), since 2× input ≡ 1.6 × price.write.
+  const cc1hShare = (cachingOn && cacheCreate>0 && pd.tok.cacheCreate1h)
+    ? Math.min(1, pd.tok.cacheCreate1h/cacheCreate) : 0;
+  const cost = (f*price.in + cr*price.read + cc*price.write*(1+0.6*cc1hShare) + o*price.out) * tierMul;
   return { cost, tokens:{ fresh:f, cacheRead:cr, cacheCreate:cc, output:o } };
 }
 
@@ -1438,6 +1443,9 @@ const isPremiumModel = m => /opus|fable|mythos/.test(m||"");
 
 function buildRecs(A){
   const G=A.G;
+  // Claude Code (subscription) data: per-token billing levers like Batch tier
+  // and workspace chargeback don't exist there — suppress those recs.
+  const isCode = DATA.source==="claude-code";
   const input=G.fresh+G.cacheRead+G.cacheCreate;
   const total=input+G.output;
   const hit=G.cacheRead/(input||1);
@@ -1514,7 +1522,7 @@ function buildRecs(A){
 
   /* ---- COST: batch tier for non-urgent work ---- */
   const batchEst = batchableCost(A);
-  if(batchEst > total*0.0002 && batchEst > 5){
+  if(!isCode && batchEst > total*0.0002 && batchEst > 5){
     recs.push({
       cat:"cost", tierCol:"--accent", kind:"cost", id:"batch-tier",
       assume:`assumes ${pctOf("batchEligible")} of standard-tier work has no human waiting on it`,
@@ -1635,14 +1643,17 @@ const response = await client.messages.create({ model, /* ...rest of your call *
     recs.push({
       cat:"govern", tierCol:"--warn", kind:"cost", id:"spend-alert",
       docs:"https://platform.claude.com/docs/en/manage-claude/usage-cost-api",
-      applied:(DATA.source==="live"), appliedNote:"built in — fetch-usage.mjs runs checkSpendAnomaly on every fetch (set LEDGER_ALERT_USD in .env)",
+      applied:(DATA.source==="live"||isCode),
+      appliedNote: isCode
+        ? "built in — every scan runs checkSpendAnomaly on the list-price estimate of your sessions (set LEDGER_ALERT_USD in .env)"
+        : "built in — fetch-usage.mjs runs checkSpendAnomaly on every fetch (set LEDGER_ALERT_USD in .env)",
       title:`Set a spend alert on ${top.name}`,
       impact:null, impactCap:"concentration risk", effort:"easy",
       proj:`${(top.cost/G.cost*100).toFixed(0)}% of spend`,
       body:`${top.name} is ${(top.cost/G.cost*100).toFixed(0)}% of your bill — a single misbehaving loop there moves your whole number. Poll the Cost API by <code>workspace_id</code> on a schedule and alert past a daily threshold. You already run scheduled jobs; this is one more.`,
     });
   }
-  if(projects.length >= 5) recs.push({
+  if(!isCode && projects.length >= 5) recs.push({
     cat:"govern", tierCol:"--warn", kind:"cost", id:"chargeback",
     docs:"https://platform.claude.com/docs/en/manage-claude/usage-cost-api",
     title:"Chargeback by workspace",
@@ -1820,6 +1831,13 @@ function setSourceBadge(src, generatedAt){
     b.textContent = "Live data";
     b.className="badge-mock badge-live";
     b.title = generatedAt ? ("Your real usage · fetched "+new Date(generatedAt).toLocaleString()) : "Your real usage";
+  } else if(src==="claude-code"){
+    b.textContent = "Claude Code data";
+    b.className="badge-mock badge-live";
+    b.title = "Your local Claude Code sessions (~/.claude/projects) · dollar figures are list-price value — subscription plans aren't billed per token"
+      + (generatedAt ? " · scanned "+new Date(generatedAt).toLocaleString() : "");
+    const sub=document.getElementById("mastSub");
+    if(sub) sub.innerHTML = 'Claude Code usage &amp; efficiency · <code>~/.claude/projects</code> · local session transcripts';
   } else {
     b.textContent = "Demo data";
     b.className="badge-mock";
@@ -1887,9 +1905,12 @@ function renderHistoryTrend(rows){
   });
 }
 
-async function loadHistory(){
+async function loadHistory(src){
+  // each data source accumulates its own history file — billed cost for the
+  // Admin API, list-price estimate for Claude Code
+  const file = src==="claude-code" ? "./snapshots/history-code.jsonl" : "./snapshots/history.jsonl";
   try{
-    const res = await fetch("./snapshots/history.jsonl", { cache:"no-store" });
+    const res = await fetch(file, { cache:"no-store" });
     if(!res.ok) return renderHistoryTrend(null);
     const text = await res.text();
     const rows = text.split("\n").filter(l=>l.trim()).map(l=>{ try{ return JSON.parse(l); }catch{ return null; } }).filter(Boolean);
@@ -1911,13 +1932,14 @@ async function bootstrap(){
         DATA = json;
         setSourceBadge(json.source || "live", json.generatedAt);
         render();
+        loadHistory(json.source || "live");
         return;
       }
     }
   }catch(e){ /* file:// or missing data.json — expected; use synthetic */ }
   setSourceBadge("fixture");
   render();
+  loadHistory("fixture");
 }
 bootstrap();
-loadHistory();
 </script>

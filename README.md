@@ -1,14 +1,25 @@
 # 🪙 Token Ledger
 
-A self-hosted dashboard for your **Claude API** usage — tokens, cost, per-project
-breakdown, and efficiency recommendations that tell you *what to actually do* to
-spend less without hurting quality.
+A local-first dashboard for your **Claude** token usage — tokens, cost,
+per-project breakdown, and efficiency recommendations that tell you *what to
+actually do* to spend less without hurting quality.
 
-It runs against the [Anthropic Usage & Cost Admin API](https://platform.claude.com/docs/en/api/usage-cost-api).
-No account? No key? It still works — it ships with a realistic sample so you can
-see the whole thing before wiring up your own data.
+Two data sources, same dashboard:
+
+- **Claude Code** — reads the session transcripts already on your machine
+  (`~/.claude/projects`). **No key, no account setup, no config.** Shows the
+  list-price value of what your subscription actually consumes.
+- **Claude API (org accounts)** — pulls org-wide usage and billed cost from the
+  [Anthropic Usage & Cost Admin API](https://platform.claude.com/docs/en/api/usage-cost-api),
+  reconciled against your real invoice.
+
+Neither one? It ships with a realistic sample so you can see everything first.
 
 ![token ledger](docs/preview.png)
+
+**[Live demo →](https://todd-father.github.io/token-ledger/)** — the full
+dashboard running on the synthetic sample. *(Activates once GitHub Pages is
+enabled for the repo: Settings → Pages → Source: GitHub Actions.)*
 
 ---
 
@@ -17,32 +28,40 @@ see the whole thing before wiring up your own data.
 This is the important part, so it's first:
 
 - The **tool** is public — clone it, read it, fork it.
-- Your **usage numbers are not.** When you fetch your real data, it lands in
-  `data.json`, which is **gitignored**. Your `.env` (holding your key) is
-  gitignored too. Neither can be committed or pushed. They live only on your
-  machine.
-
-Nothing about your account, spend, or projects leaves your computer.
+- Your **usage numbers are not.** Fetched data lands in `data.json`
+  (gitignored), your key stays in `.env` (gitignored), and the Claude Code
+  scanner only ever *reads* your local transcripts. Nothing about your
+  account, spend, projects, or sessions leaves your computer.
 
 ---
 
 ## Quick start
 
 ```bash
-git clone <your-fork-url> token-ledger
-cd token-ledger
-
-# See it immediately with sample data — no key needed:
-npm start
-# → opens a server at http://localhost:4319
+npx token-ledger
+# → scans your Claude Code sessions (or uses the sample), serves the
+#   dashboard at http://localhost:4319, and opens it
 ```
 
-That's it. `npm start` fetches data (sample by default), serves the page, and
-you open the URL. The badge in the corner reads **Demo data** until you add a key.
+Or from a clone:
+
+```bash
+git clone <your-fork-url> token-ledger
+cd token-ledger
+npm start
+```
+
+Source selection is automatic: an Admin key in `.env` → org API data; no key
+but Claude Code on this machine → your local sessions; neither → the bundled
+sample (badge reads **Demo data**). Force a source with `--claude-code` or
+`--fixture`, or `npm run fetch:code`.
+
+> Installed via `npx`? Your data lives in `~/.token-ledger` (override with
+> `LEDGER_HOME`), so it survives npm cache cleanups. Put your `.env` there.
 
 ---
 
-## Going live with your own usage
+## Going live with the Admin API (org accounts)
 
 The dashboard reads a `data.json` produced by `scripts/fetch-usage.mjs`. To fill
 it with *your* numbers:
@@ -137,15 +156,27 @@ your own workloads. Figures recompute instantly; your settings persist locally.
 ## How it works
 
 ```
-scripts/fetch-usage.mjs   ── calls the Admin API (chunked ≤31d/request),
-                             normalizes to millions of tokens per
-                             day × project × token-type, writes ↓
-data.json                 ── your data (gitignored)
-index.html                ── fetches ./data.json on load; falls back to
-                             the built-in sample if absent
-scripts/serve.mjs         ── tiny static server (browsers block file:// fetch)
-sample.data.json          ── committed demo fixture (safe, synthetic)
+scripts/fetch-usage.mjs      ── source selection + Admin API fetch (chunked
+                                ≤31d/request); normalizes to millions of
+                                tokens per day × project × token-type ↓
+scripts/lib/claude-code.mjs  ── the Claude Code adapter: scans
+                                ~/.claude/projects transcripts, dedups
+                                per-message usage, folds to the same shape
+scripts/lib/pricing.mjs      ── the one per-model price table (embedded
+                                into data.json on every fetch)
+data.json                    ── your data (gitignored)
+index.html                   ── fetches ./data.json on load; falls back to
+                                the built-in sample if absent
+scripts/serve.mjs            ── tiny static server (browsers block file:// fetch)
+sample.data.json             ── committed demo fixture (safe, synthetic)
 ```
+
+**Claude Code specifics:** usage is read per assistant message (deduped — the
+transcript format writes each message several times), 1-hour cache writes are
+priced at their real 2×-input rate, and since subscription plans have no
+per-token invoice, every dollar figure is the **list-price value** of the
+tokens consumed (the same framing ccusage uses). Recommendations that only
+exist for API billing (Batch tier, workspace chargeback) are suppressed.
 
 Token-type fields from the API — `uncached_input_tokens`, `cache_read_input_tokens`,
 `cache_creation_input_tokens`, `output_tokens` — map 1:1 onto the chart stacks and

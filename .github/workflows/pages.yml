@@ -1,0 +1,47 @@
+# Deploys the dashboard with the bundled SAMPLE fixture as a public demo.
+# Only sample.data.json (synthetic) is ever published — real usage data is
+# gitignored and never reaches the repo, let alone this workflow.
+#
+# Requires GitHub Pages to be enabled for the repo with source = "GitHub
+# Actions" (Settings → Pages). Until then this workflow is inert.
+name: Deploy demo to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build demo site (sample fixture only)
+        run: |
+          mkdir -p _site
+          cp index.html _site/
+          node -e "
+            const fs = require('fs');
+            const f = JSON.parse(fs.readFileSync('sample.data.json', 'utf8'));
+            f.source = 'fixture';
+            f.generatedAt = new Date().toISOString();
+            fs.writeFileSync('_site/data.json', JSON.stringify(f));
+          "
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
