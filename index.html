@@ -1298,7 +1298,7 @@ function projectRollup(A){
   return A.projTotals.map(p=>{
     const input=p.fresh+p.cacheRead+p.cacheCreate;
     const total=input+p.output;
-    return { name:p.name, model:p.model, cost:p.cost, input, output:p.output, total,
+    return { name:p.name, id:p.id, model:p.model, cost:p.cost, input, output:p.output, total,
       fresh:p.fresh, cacheRead:p.cacheRead, cacheCreate:p.cacheCreate,
       hit: p.cacheRead/(input||1), io: p.output/(input||1) };
   }).sort((a,b)=>b.cost-a.cost);
@@ -1363,7 +1363,13 @@ function buildRecs(A){
         effort:"easy",
         proj: worst? `biggest win: ${worst.name}`:null,
         body:`Cache hit is ${(hit*100).toFixed(0)}% and ${cacheable.length} project${cacheable.length>1?'s are':' is'} context-heavy (low output÷input) — the ideal caching profile. Mark the unchanging head of your prompts (system instructions, tool defs, retrieved docs) with <code>cache_control</code>. Reads bill at ~10% of fresh input, and identical context also makes responses more consistent.`,
-        code:`<span class="c-com">// last stable block before the variable part</span>
+        code: (worst && !worst.id)
+          ? `<span class="c-com">// WHERE: Claude Code — nothing to paste, it caches automatically</span>
+<span class="c-com">// This low hit rate usually means short, one-off sessions rather</span>
+<span class="c-com">// than a fixable setting. Reusing the same files/context across</span>
+<span class="c-com">// turns in one session raises this on its own.</span>`
+          : `<span class="c-com">// WHERE: In ${worst? worst.name : 'your'} API code, on the request you send most often</span>
+<span class="c-com">// HOW: mark the stable (unchanging) part of your prompt like this —</span>
 {
   <span class="c-key">"type"</span>: <span class="c-str">"text"</span>,
   <span class="c-key">"text"</span>: <span class="c-str">"&lt;system + tools + retrieved docs&gt;"</span>,
@@ -1391,14 +1397,16 @@ function buildRecs(A){
       cat:"cost", tierCol:"--accent", kind:"cost", id:"batch-tier",
       docs:"https://platform.claude.com/docs/en/build-with-claude/batch-processing",
       verify:"Service tier filter shows a batch share above 0% after adoption",
-      fix:`<span class="c-com">// submit jobs as one batch instead of N live calls (−50%)</span>
+      fix:`<span class="c-com">// WHERE: your own backend code, not Claude Code (there's no "batch" button</span>
+<span class="c-com">// in the chat UI — this only applies where you're calling the API yourself)</span>
+<span class="c-com">// HOW: instead of one messages.create() call per job, submit them all at once —</span>
 const batch = await client.messages.batches.create({
   requests: jobs.map((j, i) => ({
     custom_id: \`job-\${i}\`,
     params: { model, max_tokens: 1024, messages: j }
   }))
 });
-<span class="c-com">// poll client.messages.batches.retrieve(batch.id) until ended</span>`,
+<span class="c-com">// then poll client.messages.batches.retrieve(batch.id) until it's done (1-24h)</span>`,
       title:"Move non-interactive jobs to Batch tier",
       impact: toReal(batchEst), impactCap:"save / window", effort:"easy",
       proj:"eval runs, backfills, scheduled summaries",
@@ -1436,14 +1444,21 @@ const response = await client.messages.create({ model, /* ...rest of your call *
 
   /* ---- QUALITY: output-heavy / capping ---- */
   if(io>0.8){
+    const outHog = projects.slice().sort((a,b)=>b.io-a.io)[0];
     recs.push({
       cat:"quality", tierCol:"--t-output", kind:"cost", id:"output-length",
       docs:"https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/overview",
       verify:"output ÷ input ratio in the Efficiency panel falls next window",
-      fix:`<span class="c-com">// cap responses + ask for brevity in the system prompt</span>
+      fix: (outHog && !outHog.id)
+        ? `<span class="c-com">// WHERE: Claude Code — nothing to paste, this is a prompting habit</span>
+<span class="c-com">// HOW: ask explicitly for brevity ("answer in 2 sentences, no preamble"),</span>
+<span class="c-com">// or add a standing note to CLAUDE.md: "keep responses concise by default"</span>`
+        : `<span class="c-com">// WHERE: In ${outHog? outHog.name : 'your'} API code</span>
+<span class="c-com">// HOW: cap the response and tell the model to be terse —</span>
 { max_tokens: 512, system: "Answer concisely. No preamble or recap." }`,
       title:"Rein in runaway output length",
       impact: null, impactCap:"output is 5× input price", effort:"easy",
+      proj: outHog? `worst: ${outHog.name}`:null,
       body:`Output÷input is ${io.toFixed(2)} — you're generating a lot per unit of context, and output tokens cost ~5× input. Set a deliberate <code>max_tokens</code>, ask for structured/terse formats where you don't need prose, and stop paying for padding. Tighter output is usually <em>better</em> output.`,
     });
   }
