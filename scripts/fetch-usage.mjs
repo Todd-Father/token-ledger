@@ -43,20 +43,42 @@ const opt = (name, def) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : def;
 };
 
-/* ---------- pricing (per Mtok, USD) — keep in sync with the dashboard ---------- */
+/* ---------- pricing (per Mtok, USD) — keep in sync with the dashboard ----------
+ * Source: https://platform.claude.com/docs (Pricing). Last verified: 2026-07-31.
+ * NOTE: Sonnet 5 pricing RISES on 2026-09-01 ($2→$3 in, $10→$15 out, etc.).
+ * priceFor(model, dateStr) handles that switch per-day automatically.
+ * The reconcile check in main() warns if these numbers drift from real billing.
+ */
 const PRICE = {
-  "claude-opus-4-8":  { in: 15,   read: 1.5,  write: 18.75, out: 75 },
-  "claude-sonnet-5":  { in: 3,    read: 0.30, write: 3.75,  out: 15 },
-  "claude-haiku-4-5": { in: 0.80, read: 0.08, write: 1.00,  out: 4 },
+  "claude-opus-4-8":  { in: 5,  read: 0.50, write: 6.25,  out: 25 },
+  "claude-sonnet-5":  { in: 2,  read: 0.20, write: 2.50,  out: 10 }, // through 2026-08-31
+  "claude-haiku-4-5": { in: 1,  read: 0.10, write: 1.25,  out: 5  },
+  "claude-fable-5":   { in: 10, read: 1.00, write: 12.50, out: 50 },
 };
-// Any model the API returns that we don't have a price for: fall back to sonnet-ish.
-const priceFor = (model) => PRICE[normalizeModel(model)] || PRICE["claude-sonnet-5"];
+const PRICE_SONNET5_FROM_SEPT2026 = { in: 3, read: 0.30, write: 3.75, out: 15 };
+const SONNET5_PRICE_CHANGE = "2026-09-01";
+// Date-aware lookup. dateStr is "YYYY-MM-DD" (a day bucket); omit for "today".
+function priceFor(model, dateStr) {
+  const norm = normalizeModel(model);
+  if (norm === "claude-sonnet-5") {
+    const d = dateStr || new Date().toISOString().slice(0, 10);
+    if (d >= SONNET5_PRICE_CHANGE) return PRICE_SONNET5_FROM_SEPT2026;
+  }
+  return PRICE[norm] || PRICE["claude-sonnet-5"];
+}
+const _warnedModels = new Set();
 function normalizeModel(m) {
   if (!m) return "claude-sonnet-5";
   const s = m.toLowerCase();
+  if (s.includes("fable")) return "claude-fable-5";
   if (s.includes("opus")) return "claude-opus-4-8";
   if (s.includes("haiku")) return "claude-haiku-4-5";
   if (s.includes("sonnet")) return "claude-sonnet-5";
+  if (!_warnedModels.has(m)) {
+    _warnedModels.add(m);
+    console.warn(`⚠ Unknown model "${m}" — no price on file; using Sonnet pricing as a guess.`);
+    console.warn(`  Add it to PRICE in scripts/fetch-usage.mjs AND index.html for accurate costs.`);
+  }
   return m;
 }
 
@@ -103,8 +125,17 @@ async function getAll(path, params) {
     }
     if (page) url.searchParams.set("page", page);
 
-    const res = await fetch(url, { headers: HEADERS() });
-    if (!res.ok) {
+    // Retry 429 (rate limit) and transient 5xx with backoff: 2s, 4s, 8s.
+    let res;
+    for (let attempt = 0; ; attempt++) {
+      res = await fetch(url, { headers: HEADERS() });
+      if (res.ok) break;
+      if ((res.status === 429 || res.status >= 500) && attempt < 3) {
+        const wait = 2000 * 2 ** attempt;
+        console.warn(`  (API ${res.status} on ${path} — retrying in ${wait / 1000}s…)`);
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
       const body = await res.text().catch(() => "");
       throw new Error(`API ${res.status} on ${path}: ${body.slice(0, 300)}`);
     }
@@ -306,6 +337,47 @@ async function fetchLive(days) {
   return { days: outDays, DAYS: outDays.length, source: "live", generatedAt: new Date().toISOString() };
 }
 
+/* ============================================================
+   PRICE-ACCURACY CHECK ("canary")
+   Recomputes each day's cost from tokens at the PRICE-map rates and compares
+   the total against the Cost API's authoritative billed total (actualCostDay).
+   If they diverge beyond tolerance, the PRICE map is stale — warn loudly.
+   This is what keeps the dashboard honest when Anthropic changes prices.
+   ============================================================ */
+function checkPriceAccuracy(data, tolerancePct = 20) {
+  let recomputed = 0;
+  let billed = 0;
+  for (const day of data.days) {
+    if (day.actualCostDay == null) continue; // no billing truth for this day
+    billed += day.actualCostDay;
+    for (const p of day.projs) {
+      const pr = priceFor(p.model, day.date);
+      // Same blended tier weighting the dashboard uses (batch = half price).
+      const tierMul =
+        (p.tiers?.standard ?? 1) * 1 + (p.tiers?.batch ?? 0) * 0.5 + (p.tiers?.priority ?? 0) * 1;
+      recomputed +=
+        (p.tok.fresh * pr.in +
+          p.tok.cacheRead * pr.read +
+          p.tok.cacheCreate * pr.write +
+          p.tok.output * pr.out) * tierMul;
+    }
+  }
+  if (billed < 0.01) return; // nothing meaningful to compare
+  const driftPct = Math.abs(recomputed - billed) / billed * 100;
+  if (driftPct > tolerancePct) {
+    console.warn("");
+    console.warn(`⚠ PRICE MAP DRIFT DETECTED: recomputed cost ($${recomputed.toFixed(2)}) differs from`);
+    console.warn(`  billed cost ($${billed.toFixed(2)}) by ${driftPct.toFixed(0)}% (tolerance ${tolerancePct}%).`);
+    console.warn(`  Anthropic's prices have likely changed. Update the PRICE map in BOTH:`);
+    console.warn(`    • scripts/fetch-usage.mjs`);
+    console.warn(`    • index.html`);
+    console.warn(`  Current rates: https://platform.claude.com/docs (Pricing)`);
+    console.warn("");
+  } else {
+    console.log(`✓ Price check: recomputed cost within ${driftPct.toFixed(1)}% of billed — PRICE map looks accurate.`);
+  }
+}
+
 const num = (v) => (v == null ? 0 : Number(v) || 0);
 // Fallback label when a workspace has no name (shouldn't happen with List Workspaces):
 // e.g. "wrkspc_018VcMkB…" — recognizable without being the full 30-char id.
@@ -351,6 +423,7 @@ async function main() {
       return;
     }
     await writeFile(outPath, JSON.stringify(data));
+    checkPriceAccuracy(data);
     console.log(`✓ Wrote ${outPath} (${data.DAYS} days of your live data).`);
     console.log("  This file is gitignored — it stays on your machine.");
     console.log("  Open index.html to view.");

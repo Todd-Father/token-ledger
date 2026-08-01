@@ -613,12 +613,27 @@
    ============================================================ */
 
 // --- pricing per Mtok (USD), realistic Claude-family shape ---
+/* Source: https://platform.claude.com/docs (Pricing). Last verified: 2026-07-31.
+   Sonnet 5 pricing rises on 2026-09-01 — priceForDay() switches automatically.
+   Keep in sync with scripts/fetch-usage.mjs (its reconcile check warns on drift). */
 const PRICE = {
-  // [uncached_input, cache_read, cache_write(5m), output]
-  "claude-opus-4-8":   { in: 15,  read: 1.5,  write: 18.75, out: 75 },
-  "claude-sonnet-5":   { in: 3,   read: 0.30, write: 3.75,  out: 15 },
-  "claude-haiku-4-5":  { in: 0.80,read: 0.08, write: 1.00,  out: 4  },
+  // [uncached_input, cache_read, cache_write(5m), output]  — $/Mtok
+  "claude-opus-4-8":   { in: 5,   read: 0.50, write: 6.25,  out: 25 },
+  "claude-sonnet-5":   { in: 2,   read: 0.20, write: 2.50,  out: 10 }, // through 2026-08-31
+  "claude-haiku-4-5":  { in: 1,   read: 0.10, write: 1.25,  out: 5  },
+  "claude-fable-5":    { in: 10,  read: 1.00, write: 12.50, out: 50 },
 };
+const PRICE_SONNET5_FROM_SEPT2026 = { in: 3, read: 0.30, write: 3.75, out: 15 };
+const SONNET5_PRICE_CHANGE = "2026-09-01";
+// Date-aware lookup: pass the day's date ("YYYY-MM-DD") so days before/after the
+// Sonnet 5 price change are each costed at the rate that actually applied.
+function priceForDay(model, dateStr){
+  if(model === "claude-sonnet-5"){
+    const d = dateStr || new Date().toISOString().slice(0,10);
+    if(d >= SONNET5_PRICE_CHANGE) return PRICE_SONNET5_FROM_SEPT2026;
+  }
+  return PRICE[model] || PRICE["claude-sonnet-5"];
+}
 const MODELS = Object.keys(PRICE);
 
 const PROJECTS = [
@@ -681,7 +696,7 @@ let DATA = buildData();
 // returns {cost, tokens:{fresh,cacheRead,cacheCreate,output}} for a project-day,
 // honoring tier filter, tier discounts, and the caching toggle.
 function projDayCost(pd, tierFilter, cachingOn, envFilter){
-  const price = PRICE[pd.model] || PRICE["claude-sonnet-5"]; // unknown model -> sonnet-ish
+  const price = priceForDay(pd.model, pd._date); // date-aware; unknown model -> sonnet-ish
   let { fresh, cacheRead, cacheCreate, output } = pd.tok;
 
   // caching OFF => everything that would have been a cache-read is billed as fresh input,
@@ -1598,6 +1613,11 @@ async function bootstrap(){
     if(res.ok){
       const json = await res.json();
       if(json && Array.isArray(json.days) && json.days.length){
+        // Tag each project row with its day's date so projDayCost can pick the
+        // price that applied ON that day (Sonnet 5 changes price 2026-09-01).
+        for(const day of json.days){
+          for(const pd of (day.projs || [])) pd._date = day.date;
+        }
         DATA = json;
         setSourceBadge(json.source || "live", json.generatedAt);
         render();

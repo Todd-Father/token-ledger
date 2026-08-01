@@ -10,10 +10,12 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+// $/Mtok — verified 2026-07-31 against https://platform.claude.com/docs (Pricing)
 const PRICE = {
-  "claude-opus-4-8":  { in: 15, read: 1.5, write: 18.75, out: 75 },
-  "claude-sonnet-5":  { in: 3, read: 0.30, write: 3.75, out: 15 },
-  "claude-haiku-4-5": { in: 0.80, read: 0.08, write: 1.00, out: 4 },
+  "claude-opus-4-8":  { in: 5,  read: 0.50, write: 6.25,  out: 25 },
+  "claude-sonnet-5":  { in: 2,  read: 0.20, write: 2.50,  out: 10 },
+  "claude-haiku-4-5": { in: 1,  read: 0.10, write: 1.25,  out: 5 },
+  "claude-fable-5":   { in: 10, read: 1.00, write: 12.50, out: 50 },
 };
 const PROJECTS = [
   { id: "wrkspc_01example01", name: "web-app", color: "#c1852c", weight: 0.34, model: "claude-sonnet-5", cacheAff: 0.78, ioBias: 0.55 },
