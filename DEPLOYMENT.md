@@ -25,7 +25,9 @@ terminal to stop the server.
 org-wide Claude API data; with no key it reads your local Claude Code sessions
 from `~/.claude/projects`; with neither it writes the bundled sample so the
 dashboard still works end-to-end. Force one with `npm run fetch:code` or
-`npm run fetch:fixture`. See the [README](README.md) for the details.
+`npm run fetch:fixture`, or run `npm run fetch:all` to refresh every source you
+can reach (the dashboard then offers a switcher between them). See the
+[README](README.md) for the details.
 
 No clone required, either — `npx -y github:Todd-Father/token-ledger` runs the
 whole thing (fetch, serve, open) and keeps your data in `~/.token-ledger`.

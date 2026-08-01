@@ -24,6 +24,7 @@
     "test": "node --test test/*.test.mjs",
     "fetch": "node scripts/fetch-usage.mjs",
     "fetch:code": "node scripts/fetch-usage.mjs --claude-code",
+    "fetch:all": "node scripts/fetch-usage.mjs --all",
     "fetch:fixture": "node scripts/fetch-usage.mjs --fixture",
     "fixture:gen": "node scripts/gen-fixture.mjs",
     "serve": "node scripts/serve.mjs",

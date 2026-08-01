@@ -6,7 +6,7 @@
  *   npx token-ledger fetch          # refresh data only
  *   npx token-ledger serve          # serve the dashboard only
  *
- * Flags pass through to the fetch: --claude-code, --fixture, --days N.
+ * Flags pass through to the fetch: --claude-code, --all, --fixture, --days N.
  * Data source auto-detection: an Admin key in $LEDGER_HOME/.env → org API
  * data; otherwise local Claude Code sessions (~/.claude/projects); otherwise
  * the bundled sample. Nothing ever leaves the machine.
@@ -42,6 +42,6 @@ if (cmd === "serve" || cmd === "start") {
 }
 
 if (!["fetch", "serve", "start"].includes(cmd)) {
-  console.error(`Unknown command "${cmd}". Usage: token-ledger [fetch|serve|start] [--claude-code|--fixture|--days N]`);
+  console.error(`Unknown command "${cmd}". Usage: token-ledger [fetch|serve|start] [--claude-code|--all|--fixture|--days N]`);
   process.exitCode = 1;
 }

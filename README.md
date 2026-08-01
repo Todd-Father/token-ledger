@@ -73,10 +73,16 @@ npm start        # fetch + serve; then open http://localhost:4319
 Force one with `npm run fetch:code` (or `--claude-code`) and `npm run
 fetch:fixture` (or `--fixture`).
 
-**Run both and you get both.** Each fetch also saves a per-source copy
-(`data.api.json` / `data.code.json`), so once you've run `npm run fetch` *and*
-`npm run fetch:code`, the dashboard shows a **source switcher** in the header
-and a comparison strip at the top:
+**Run both and you get both.** Each fetch saves a per-source copy
+(`data.api.json` / `data.code.json`), so both stay available once fetched.
+One command refreshes everything this machine can reach:
+
+```bash
+npm run fetch:all     # every available source; skips any you can't use
+```
+
+With both present, the dashboard shows a **source switcher** in the header and
+a comparison strip at the top:
 
 ```
 Claude API · billed          Claude Code · list-price value
@@ -242,7 +248,8 @@ fetch on a cadence — once daily is plenty:
 0 6 * * * cd /path/to/token-ledger && /usr/bin/node scripts/fetch-usage.mjs >> fetch.log 2>&1
 ```
 
-Append `--claude-code` to that command for the Claude Code source. Each fetch also
+Append `--claude-code` for the Claude Code source, or `--all` to refresh every
+source in one run. Each fetch also
 appends to a long-term history file (`snapshots/history.jsonl` for API data,
 `snapshots/history-code.jsonl` for Claude Code), which powers the **Historical trend**
 chart — that outlives the API's lookback window, so the daily cron is what builds

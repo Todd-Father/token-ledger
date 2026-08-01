@@ -463,6 +463,45 @@ async function writeFixture(outPath) {
   console.log("  Open index.html to view.");
 }
 
+/* Fold + persist Claude Code entries. Shared by --claude-code, --all, and the
+ * no-key default so all three behave identically. Returns false when the scan
+ * found files but nothing inside the window. */
+async function runClaudeCode(entries, { days, outPath }) {
+  const data = foldClaudeCode(entries, { days });
+  if (!data.DAYS) {
+    console.warn("⚠ Found session files but no usage inside this window. Nothing written.");
+    return false;
+  }
+  await writeData(outPath, data);
+  // No invoice exists for subscription usage — anomaly/history run on the
+  // list-price estimate instead of billed cost.
+  checkSpendAnomaly({ days: data.days.map((d) => ({ ...d, actualCostDay: d.estCostDay })) });
+  await updateHistory(data, { file: "history-code.jsonl", costOf: (d) => d.estCostDay });
+  const projCount = new Set(data.days.flatMap((d) => d.projs.map((p) => p.name))).size;
+  console.log(`✓ Wrote ${outPath} (${data.DAYS} days, ${projCount} projects of Claude Code usage).`);
+  console.log("  Dollar figures are list-price value of the tokens — subscription plans aren't billed per token.");
+  return true;
+}
+
+/* Fetch + persist the Admin API source. Shared by the default path and --all.
+ * Throws on fetch failure so callers decide whether to fall back. */
+async function runLive({ days, outPath }) {
+  console.log(`• Fetching ${days} days of usage & cost from the Admin API…`);
+  const data = await fetchLive(days);
+  if (!data.DAYS) {
+    console.warn("⚠ API returned no buckets for this window. Nothing written.");
+    console.warn("  Check the date range, or that this org has API traffic.");
+    return false;
+  }
+  await writeData(outPath, data);
+  checkPriceAccuracy(data);
+  checkSpendAnomaly(data);
+  await updateHistory(data);
+  console.log(`✓ Wrote ${outPath} (${data.DAYS} days of your live data).`);
+  console.log("  This file is gitignored — it stays on your machine.");
+  return true;
+}
+
 async function main() {
   await loadEnv();
   const days = Number(opt("days", process.env.LEDGER_DAYS || 90));
@@ -473,6 +512,42 @@ async function main() {
   if (flag("fixture")) {
     console.log("• --fixture: writing the bundled sample instead of reading any real data.");
     await writeFixture(outPath);
+    return;
+  }
+
+  // --all: refresh every source this machine can actually reach, so the
+  // dashboard's source switcher has both sides up to date. Runs Claude Code
+  // first so the API view (if any) ends up as the active one, matching the
+  // behaviour of a plain fetch. Each source is skipped silently when it isn't
+  // available, and one source failing must not prevent the other from running.
+  if (flag("all")) {
+    let ran = 0;
+    const codeEntries = await scanClaudeCode({ days });
+    if (codeEntries.length) {
+      try {
+        console.log("• Reading local Claude Code sessions from ~/.claude/projects…");
+        if (await runClaudeCode(codeEntries, { days, outPath })) ran++;
+      } catch (err) {
+        console.error(`✗ Claude Code scan failed: ${err.message}`);
+      }
+    } else {
+      console.log("• No local Claude Code sessions found — skipping that source.");
+    }
+    if (key) {
+      console.log("");
+      try {
+        await runLive({ days, outPath });
+        ran++;
+      } catch (err) {
+        console.error(`✗ API fetch failed: ${err.message}`);
+      }
+    } else {
+      console.log("• No ANTHROPIC_ADMIN_KEY set — skipping the Claude API source.");
+    }
+    if (!ran) {
+      console.warn("⚠ No data sources available. Writing the bundled sample instead.");
+      await writeFixture(outPath);
+    }
     return;
   }
 
@@ -487,20 +562,9 @@ async function main() {
       } else {
         console.log("• --claude-code: reading local sessions from ~/.claude/projects.");
       }
-      const data = foldClaudeCode(entries, { days });
-      if (!data.DAYS) {
-        console.warn("⚠ Found session files but no usage inside this window. Nothing written.");
-        return;
+      if (await runClaudeCode(entries, { days, outPath })) {
+        console.log("  Open index.html to view.");
       }
-      await writeData(outPath, data);
-      // No invoice exists for subscription usage — anomaly/history run on the
-      // list-price estimate instead of billed cost.
-      checkSpendAnomaly({ days: data.days.map((d) => ({ ...d, actualCostDay: d.estCostDay })) });
-      await updateHistory(data, { file: "history-code.jsonl", costOf: (d) => d.estCostDay });
-      const projCount = new Set(data.days.flatMap((d) => d.projs.map((p) => p.name))).size;
-      console.log(`✓ Wrote ${outPath} (${data.DAYS} days, ${projCount} projects of Claude Code usage).`);
-      console.log("  Dollar figures are list-price value of the tokens — subscription plans aren't billed per token.");
-      console.log("  Open index.html to view.");
       return;
     }
     if (flag("claude-code")) {
@@ -519,21 +583,10 @@ async function main() {
     console.warn("  The Usage & Cost API rejects standard API keys. Continuing anyway…");
   }
 
-  console.log(`• Fetching ${days} days of usage & cost from the Admin API…`);
   try {
-    const data = await fetchLive(days);
-    if (!data.DAYS) {
-      console.warn("⚠ API returned no buckets for this window. Nothing written.");
-      console.warn("  Check the date range, or that this org has API traffic.");
-      return;
+    if (await runLive({ days, outPath })) {
+      console.log("  Open index.html to view.");
     }
-    await writeData(outPath, data);
-    checkPriceAccuracy(data);
-    checkSpendAnomaly(data);
-    await updateHistory(data);
-    console.log(`✓ Wrote ${outPath} (${data.DAYS} days of your live data).`);
-    console.log("  This file is gitignored — it stays on your machine.");
-    console.log("  Open index.html to view.");
   } catch (err) {
     console.error(`✗ Fetch failed: ${err.message}`);
     console.error("  Falling back to the bundled sample so the dashboard still opens.");
