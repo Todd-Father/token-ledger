@@ -13,7 +13,8 @@
  *
  * Docs: https://platform.claude.com/docs/en/api/usage-cost-api
  */
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -378,6 +379,70 @@ function checkPriceAccuracy(data, tolerancePct = 20) {
   }
 }
 
+/* ============================================================
+   SPEND ANOMALY ALERT — compares the last COMPLETE day's billed cost to the
+   trailing 7-day average; >3x (with a $1 floor) or over LEDGER_ALERT_USD
+   from .env fires a warning + macOS notification. Local math only; free.
+   ============================================================ */
+function checkSpendAnomaly(data) {
+  const days = data.days.filter((d) => d.actualCostDay != null);
+  if (days.length < 3) return;
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const complete = days.filter((d) => d.date < todayKey);
+  if (complete.length < 3) return;
+  const latest = complete[complete.length - 1];
+  const trailing = complete.slice(-8, -1);
+  const avg = trailing.reduce((s, d) => s + d.actualCostDay, 0) / trailing.length;
+  const absLimit = Number(process.env.LEDGER_ALERT_USD || 0);
+  const spiked = (latest.actualCostDay > Math.max(1, avg * 3)) ||
+                 (absLimit > 0 && latest.actualCostDay > absLimit);
+  if (!spiked) return;
+  const msg = "Claude spend spike: $" + latest.actualCostDay.toFixed(2) + " on " + latest.date +
+              " (trailing avg $" + avg.toFixed(2) + "/day)";
+  console.warn("");
+  console.warn(`🚨 SPEND ANOMALY: ${msg}`);
+  console.warn("   Open the dashboard and check which project/model drove it.");
+  console.warn("");
+  if (process.platform === "darwin") {
+    execFile("osascript", ["-e",
+      `display notification ${JSON.stringify(msg)} with title "Token Ledger" sound name "Basso"`],
+      () => {});
+  }
+}
+
+/* ============================================================
+   HISTORY SNAPSHOTS — data.json is overwritten each fetch and the API only
+   looks back so far; this upserts one row per day into snapshots/history.jsonl
+   (gitignored), keyed by date, so long-term history accumulates locally.
+   ============================================================ */
+async function updateHistory(data) {
+  const dir = join(ROOT, "snapshots");
+  const file = join(dir, "history.jsonl");
+  await mkdir(dir, { recursive: true });
+  const byDate = new Map();
+  if (existsSync(file)) {
+    for (const line of (await readFile(file, "utf8")).split("\n")) {
+      if (!line.trim()) continue;
+      try { const row = JSON.parse(line); byDate.set(row.date, row); } catch {}
+    }
+  }
+  for (const d of data.days) {
+    if (!d.date) continue;
+    byDate.set(d.date, {
+      date: d.date,
+      costUSD: d.actualCostDay,
+      tok: d.projs.reduce((a, p) => ({
+        fresh: a.fresh + p.tok.fresh, cacheRead: a.cacheRead + p.tok.cacheRead,
+        cacheCreate: a.cacheCreate + p.tok.cacheCreate, output: a.output + p.tok.output,
+      }), { fresh: 0, cacheRead: 0, cacheCreate: 0, output: 0 }),
+      projects: d.projs.map((p) => ({ name: p.name, cost: p.actualCost })),
+    });
+  }
+  const rows = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+  await writeFile(file, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  console.log(`✓ History: ${rows.length} days accumulated in snapshots/history.jsonl`);
+}
+
 const num = (v) => (v == null ? 0 : Number(v) || 0);
 // Fallback label when a workspace has no name (shouldn't happen with List Workspaces):
 // e.g. "wrkspc_018VcMkB…" — recognizable without being the full 30-char id.
@@ -424,6 +489,8 @@ async function main() {
     }
     await writeFile(outPath, JSON.stringify(data));
     checkPriceAccuracy(data);
+    checkSpendAnomaly(data);
+    await updateHistory(data);
     console.log(`✓ Wrote ${outPath} (${data.DAYS} days of your live data).`);
     console.log("  This file is gitignored — it stays on your machine.");
     console.log("  Open index.html to view.");

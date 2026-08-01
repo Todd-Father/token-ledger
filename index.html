@@ -1329,9 +1329,13 @@ function buildRecs(A){
     const cacheable = projects.filter(p=>p.io<0.7 && p.hit<0.75);
     const freshCacheable = cacheable.reduce((s,p)=>s+p.fresh,0);
     if(hit<0.75 && freshCacheable>0.5){
-      // moving fresh→cache-read saves ~90% on that slice; assume you can convert ~55% of the gap
-      const priceGap = 3*(1-0.1); // sonnet-ish $/Mtok saved per Mtok converted
-      const est = toReal(freshCacheable*0.55*priceGap);
+      // moving fresh→cache-read saves (in − read) per Mtok at each project's OWN
+      // model price (from the PRICE map — no hardcoded rate); assume ~55% convertible.
+      const savableUSD = cacheable.reduce((s,p)=>{
+        const pr = priceForDay(p.model);
+        return s + p.fresh * (pr.in - pr.read);
+      },0);
+      const est = toReal(savableUSD*0.55);
       const worst = cacheable[0];
       recs.push({
         cat:"cost", tierCol:"--accent", kind:"both",
