@@ -594,6 +594,13 @@
     </div>
   </div>
 
+  <!-- ================= HISTORICAL TREND ================= -->
+  <div class="card" id="trendCard" style="display:none">
+    <h2>Historical trend <span style="font-size:11px;color:var(--ink-3);font-weight:500" id="trendSpan"></span></h2>
+    <p class="desc">Daily billed cost since tracking began — outlasts whatever window is loaded above, from <code>snapshots/history.jsonl</code>.</p>
+    <div id="trendChart"></div>
+  </div>
+
   <!-- ================= ACTIONS / RECOMMENDATIONS ================= -->
   <div class="card act-card">
     <h2>Take action
@@ -1695,6 +1702,75 @@ function setSourceBadge(src, generatedAt){
 }
 
 /* ---------- bootstrap: prefer live data.json, fall back to synthetic ---------- */
+function renderHistoryTrend(rows){
+  const card = document.getElementById("trendCard");
+  if(!rows || rows.length < 3){ card.style.display="none"; return; }
+  card.style.display="";
+  rows = rows.slice().sort((a,b)=>a.date.localeCompare(b.date));
+  document.getElementById("trendSpan").textContent =
+    `${rows.length} day${rows.length>1?'s':''} tracked \u00b7 since ${rows[0].date}`;
+
+  const host = document.getElementById("trendChart");
+  const W=1100, H=200, padL=48, padR=8, padT=10, padB=24;
+  const iw=W-padL-padR, ih=H-padT-padB;
+  const n = rows.length;
+  const ymax = Math.max(...rows.map(r=>r.costUSD||0), 1) * 1.15;
+  const x = i => padL + (n===1 ? iw/2 : (iw*i/(n-1)));
+  const y = v => padT + ih - (v/ymax)*ih;
+
+  let grid = "";
+  for(let i=0;i<=2;i++){
+    const gy = padT + ih*i/2;
+    const gv = ymax*(1-i/2);
+    grid += `<line x1="${padL}" y1="${gy}" x2="${W-padR}" y2="${gy}" stroke="var(--line-soft)" stroke-width="1"/>`;
+    grid += `<text x="${padL-6}" y="${gy+3}" text-anchor="end" font-size="10" fill="var(--ink-3)">$${gv.toFixed(gv<10?1:0)}</text>`;
+  }
+
+  let path = "", seg = false, dots = "";
+  rows.forEach((r,i)=>{
+    const cx=x(i), cy=y(r.costUSD||0);
+    path += (seg? "L":"M") + cx.toFixed(1) + " " + cy.toFixed(1) + " ";
+    seg = true;
+    dots += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="2.5" fill="var(--accent)" data-date="${r.date}" data-cost="${(r.costUSD||0).toFixed(2)}" class="trend-dot"/>`;
+  });
+
+  const labelIdx = n===1 ? [0] : [0, Math.floor((n-1)/2), n-1];
+  let xlabels = "";
+  labelIdx.forEach(i=>{
+    xlabels += `<text x="${x(i).toFixed(1)}" y="${H-6}" text-anchor="middle" font-size="10" fill="var(--ink-3)">${rows[i].date}</text>`;
+  });
+
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px" id="trendSvg">
+    ${grid}
+    <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    ${dots}
+    ${xlabels}
+  </svg>
+  <div class="tip" id="trendTip" style="display:none"></div>`;
+
+  const tip = document.getElementById("trendTip");
+  host.querySelectorAll(".trend-dot").forEach(dot=>{
+    dot.addEventListener("mouseenter", e=>{
+      tip.style.display="block";
+      tip.innerHTML = `<b>${dot.dataset.date}</b><br>$${dot.dataset.cost}`;
+      const r = host.getBoundingClientRect();
+      tip.style.left = (e.clientX - r.left + 10) + "px";
+      tip.style.top  = (e.clientY - r.top - 10) + "px";
+    });
+    dot.addEventListener("mouseleave", ()=>{ tip.style.display="none"; });
+  });
+}
+
+async function loadHistory(){
+  try{
+    const res = await fetch("./snapshots/history.jsonl", { cache:"no-store" });
+    if(!res.ok) return renderHistoryTrend(null);
+    const text = await res.text();
+    const rows = text.split("\n").filter(l=>l.trim()).map(l=>{ try{ return JSON.parse(l); }catch{ return null; } }).filter(Boolean);
+    renderHistoryTrend(rows);
+  }catch(e){ renderHistoryTrend(null); }
+}
+
 async function bootstrap(){
   try{
     const res = await fetch("./data.json", { cache: "no-store" });
@@ -1717,4 +1793,5 @@ async function bootstrap(){
   render();
 }
 bootstrap();
+loadHistory();
 </script>
