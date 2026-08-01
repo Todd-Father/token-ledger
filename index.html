@@ -1419,8 +1419,9 @@ const batch = await client.messages.batches.create({
       cat:"cost", tierCol:"--accent", kind:"both", id:"right-size",
       docs:"https://platform.claude.com/docs/en/about-claude/models/overview",
       verify:"that project's $/Mtok drops toward the cheaper model's rate; spot-check 5 real outputs first",
-      fix:`<span class="c-com">// try the cheaper model on easy calls; keep the strong one for hard ones</span>
-const model = isHardTask ? "claude-opus-4-8" : "claude-haiku-4-5";`,
+      fix:`<span class="c-com">// WHERE: Claude Code — click the model dropdown before you type</span>
+<span class="c-com">// CONTEXT: Pick Haiku for easy tasks (classify/format/extract), Opus for hard ones</span>
+const model = isHardTask ? "claude-opus-4-8" : "claude-haiku-4-5"; <span class="c-com">// or just pick from the UI dropdown</span>`,
       title:"Right-size the model where quality holds",
       impact: est, impactCap:"save / window", effort:"med",
       proj:`review: ${p0.name}`,
