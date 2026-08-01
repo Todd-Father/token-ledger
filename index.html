@@ -388,6 +388,23 @@
   }
   .rec pre .c-key { color: var(--accent); }
   .rec pre .c-str { color: var(--good); }
+  .rec .r-verify { font-size: 11px; color: var(--ink-2); margin-top: 8px; line-height: 1.5; }
+  .rec .r-verify b { color: var(--ink); font-weight: 640; }
+  .rec .r-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
+  .rec .r-docs { font-size: 11px; color: var(--accent); text-decoration: none; font-weight: 600; }
+  .rec .r-docs:hover { text-decoration: underline; }
+  .rec .r-dismiss {
+    font: inherit; font-size: 10.5px; color: var(--ink-3); background: none; border: none;
+    cursor: pointer; padding: 2px 4px; opacity: 0; transition: opacity .15s;
+  }
+  .rec:hover .r-dismiss { opacity: 1; }
+  .rec .r-dismiss:hover { color: var(--ink); text-decoration: underline; }
+  .rec.rec-applied { opacity: .75; }
+  .r-restore { grid-column: 1 / -1; text-align: center; font-size: 11px; color: var(--ink-3); padding: 4px 0; }
+  .r-restore button {
+    font: inherit; font-size: 11px; color: var(--accent); background: none; border: none;
+    cursor: pointer; text-decoration: underline; padding: 0;
+  }
   .rec pre .c-com { color: var(--ink-3); font-style: italic; }
   .act-empty { font-size: 12.5px; color: var(--ink-3); margin: 4px 2px 0; }
 
@@ -1338,7 +1355,9 @@ function buildRecs(A){
       const est = toReal(savableUSD*0.55);
       const worst = cacheable[0];
       recs.push({
-        cat:"cost", tierCol:"--accent", kind:"both",
+        cat:"cost", tierCol:"--accent", kind:"both", id:"cache-prefixes",
+        docs:"https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+        verify:"cache hit % moves off 0 for that project after the next fetch",
         title:"Cache your stable prompt prefixes",
         impact: est, impactCap:"save / window",
         effort:"easy",
@@ -1356,7 +1375,9 @@ function buildRecs(A){
     // caching is toggled OFF — the single biggest lever
     const est = toReal(noCacheCost()-G.cost < 0 ? 0 : (noCacheCost()-G.cost));
     recs.push({
-      cat:"cost", tierCol:"--crit", kind:"cost",
+      cat:"cost", tierCol:"--crit", kind:"cost", id:"caching-off",
+      docs:"https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+      verify:"flip the Prompt caching toggle above — the KPIs restate instantly",
       title:"Turn prompt caching back on",
       impact: est, impactCap:"save / window", effort:"easy",
       body:`You're modeling caching OFF. On this exact workload, caching reused context would cut spend materially with zero change to output quality. This is the highest-leverage single switch on the page.`,
@@ -1367,7 +1388,17 @@ function buildRecs(A){
   const batchEst = batchableCost(A);
   if(batchEst > total*0.0002 && batchEst > 5){
     recs.push({
-      cat:"cost", tierCol:"--accent", kind:"cost",
+      cat:"cost", tierCol:"--accent", kind:"cost", id:"batch-tier",
+      docs:"https://platform.claude.com/docs/en/build-with-claude/batch-processing",
+      verify:"Service tier filter shows a batch share above 0% after adoption",
+      fix:`<span class="c-com">// submit jobs as one batch instead of N live calls (−50%)</span>
+const batch = await client.messages.batches.create({
+  requests: jobs.map((j, i) => ({
+    custom_id: \`job-\${i}\`,
+    params: { model, max_tokens: 1024, messages: j }
+  }))
+});
+<span class="c-com">// poll client.messages.batches.retrieve(batch.id) until ended</span>`,
       title:"Move non-interactive jobs to Batch tier",
       impact: toReal(batchEst), impactCap:"save / window", effort:"easy",
       proj:"eval runs, backfills, scheduled summaries",
@@ -1385,7 +1416,11 @@ function buildRecs(A){
     const est = opusShare * costBasis * 0.4 * 0.8;
     const p0=opusProjects.sort((a,b)=>b.cost-a.cost)[0];
     recs.push({
-      cat:"cost", tierCol:"--accent", kind:"both",
+      cat:"cost", tierCol:"--accent", kind:"both", id:"right-size",
+      docs:"https://platform.claude.com/docs/en/about-claude/models/overview",
+      verify:"that project's $/Mtok drops toward the cheaper model's rate; spot-check 5 real outputs first",
+      fix:`<span class="c-com">// try the cheaper model on easy calls; keep the strong one for hard ones</span>
+const model = isHardTask ? "claude-opus-4-8" : "claude-haiku-4-5";`,
       title:"Right-size the model where quality holds",
       impact: est, impactCap:"save / window", effort:"med",
       proj:`review: ${p0.name}`,
@@ -1396,7 +1431,11 @@ function buildRecs(A){
   /* ---- QUALITY: output-heavy / capping ---- */
   if(io>0.8){
     recs.push({
-      cat:"quality", tierCol:"--t-output", kind:"cost",
+      cat:"quality", tierCol:"--t-output", kind:"cost", id:"output-length",
+      docs:"https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/overview",
+      verify:"output ÷ input ratio in the Efficiency panel falls next window",
+      fix:`<span class="c-com">// cap responses + ask for brevity in the system prompt</span>
+{ max_tokens: 512, system: "Answer concisely. No preamble or recap." }`,
       title:"Rein in runaway output length",
       impact: null, impactCap:"output is 5× input price", effort:"easy",
       body:`Output÷input is ${io.toFixed(2)} — you're generating a lot per unit of context, and output tokens cost ~5× input. Set a deliberate <code>max_tokens</code>, ask for structured/terse formats where you don't need prose, and stop paying for padding. Tighter output is usually <em>better</em> output.`,
@@ -1407,7 +1446,8 @@ function buildRecs(A){
   const hardProj = projects.find(p=>p.model==="claude-opus-4-8" && p.io>0.6);
   if(hardProj){
     recs.push({
-      cat:"quality", tierCol:"--t-output", kind:"quality",
+      cat:"quality", tierCol:"--t-output", kind:"quality", id:"thinking-budget",
+      docs:"https://platform.claude.com/docs/en/build-with-claude/extended-thinking",
       title:"Spend a thinking budget, not a retry budget",
       impact:null, impactCap:"fewer wrong-answer redos", effort:"med",
       proj:hardProj.name,
@@ -1418,7 +1458,8 @@ function buildRecs(A){
   /* ---- QUALITY: consistency via system-prompt caching ---- */
   if(hit<0.6 && projects.length>1){
     recs.push({
-      cat:"quality", tierCol:"--t-output", kind:"both",
+      cat:"quality", tierCol:"--t-output", kind:"both", id:"canonical-prompt",
+      docs:"https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
       title:"Pin one canonical system prompt across projects",
       impact:null, impactCap:"consistency + cache reuse", effort:"med",
       body:`A shared, cached system prompt makes responses consistent across your properties <em>and</em> raises the cache-read share at the same time — the rare lever that improves quality and cost together. Version it once; reuse the cached block everywhere.`,
@@ -1427,14 +1468,16 @@ function buildRecs(A){
 
   /* ---- SKILL / WORKFLOW ---- */
   recs.push({
-    cat:"skill", tierCol:"--ink-3", kind:"cost",
+    cat:"skill", tierCol:"--ink-3", kind:"cost", id:"cost-guard",
+    docs:"https://code.claude.com/docs/en/hooks",
     title:"Add a cost-guard hook to Claude Code",
     impact:null, impactCap:"prevents surprise spend", effort:"easy",
     body:`A <code>settings.json</code> hook that flags oversized contexts or an accidental Opus default before a run — cheap insurance against a runaway session. The <code>update-config</code> skill wires it; it's the FinOps equivalent of your security pre-commit gate.`,
   });
   if(projects.some(p=>p.hit<0.5)){
     recs.push({
-      cat:"skill", tierCol:"--ink-3", kind:"both",
+      cat:"skill", tierCol:"--ink-3", kind:"both", id:"prompt-skill",
+      docs:"https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
       title:"Standardize a caching-first prompt skill",
       impact:null, impactCap:"bakes the win into every call", effort:"med",
       body:`Package your prompt-assembly pattern (stable prefix → <code>cache_control</code> → variable tail) as a reusable skill/subagent so every property inherits the caching discipline instead of each rediscovering it. Turns a one-time fix into a default.`,
@@ -1445,15 +1488,18 @@ function buildRecs(A){
   const top=projects[0];
   if(top && top.cost > G.cost*0.35){
     recs.push({
-      cat:"govern", tierCol:"--warn", kind:"cost",
+      cat:"govern", tierCol:"--warn", kind:"cost", id:"spend-alert",
+      docs:"https://platform.claude.com/docs/en/manage-claude/usage-cost-api",
+      applied:(DATA.source==="live"), appliedNote:"built in — fetch-usage.mjs runs checkSpendAnomaly on every fetch (set LEDGER_ALERT_USD in .env)",
       title:`Set a spend alert on ${top.name}`,
       impact:null, impactCap:"concentration risk", effort:"easy",
       proj:`${(top.cost/G.cost*100).toFixed(0)}% of spend`,
       body:`${top.name} is ${(top.cost/G.cost*100).toFixed(0)}% of your bill — a single misbehaving loop there moves your whole number. Poll the Cost API by <code>workspace_id</code> on a schedule and alert past a daily threshold. You already run scheduled jobs; this is one more.`,
     });
   }
-  recs.push({
-    cat:"govern", tierCol:"--warn", kind:"cost",
+  if(projects.length >= 5) recs.push({
+    cat:"govern", tierCol:"--warn", kind:"cost", id:"chargeback",
+    docs:"https://platform.claude.com/docs/en/manage-claude/usage-cost-api",
     title:"Chargeback by workspace",
     impact:null, impactCap:"per-property P&L", effort:"med",
     body:`As a multi-property operator, tag each property's usage to its own workspace so the Cost API gives you clean per-property economics — which apps earn their inference cost and which don't. Group <code>/cost_report</code> by <code>workspace_id</code> monthly.`,
@@ -1474,12 +1520,20 @@ const KIND_LABEL = { cost:["Cost","t-cost"], quality:["Response quality","t-qual
 const EFF_LABEL = { easy:["Easy","eff-easy"], med:["Medium lift","eff-med"] };
 let ACT_FILTER = "all";
 
+const DISMISS_KEY = "ledger-dismissed-recs";
+function getDismissed(){ try{ return new Set(JSON.parse(localStorage.getItem(DISMISS_KEY)||"[]")); }catch{ return new Set(); } }
+function setDismissed(set){ try{ localStorage.setItem(DISMISS_KEY, JSON.stringify([...set])); }catch{} }
+function dismissRec(id){ const d=getDismissed(); d.add(id); setDismissed(d); render(); }
+function restoreRecs(){ setDismissed(new Set()); render(); }
+
 function renderActions(A){
   const { recs, monthly } = buildRecs(A);
-  const shown = recs.filter(r=> ACT_FILTER==="all" || r.cat===ACT_FILTER);
+  const dismissed = getDismissed();
+  const visible = recs.filter(r=> !r.id || !dismissed.has(r.id));
+  const shown = visible.filter(r=> ACT_FILTER==="all" || r.cat===ACT_FILTER);
 
   // header total: sum of quantified monthly savings among cost-bearing recs
-  const savings = recs.filter(r=>typeof r.impact==="number").reduce((s,r)=>s+r.impact,0);
+  const savings = visible.filter(r=>typeof r.impact==="number" && !r.applied).reduce((s,r)=>s+r.impact,0);
   const monthlySave = monthly(savings);
   const tEl=document.getElementById("actTotal");
   if(savings>1){ tEl.textContent=`≈ ${fmt$(monthlySave)}/mo in identified savings`; tEl.className="act-total"; }
@@ -1496,20 +1550,29 @@ function renderActions(A){
     const impBlock = (typeof r.impact==="number" && r.impact>0)
       ? `<div class="imp-num save">${fmt$(monthly(r.impact))}</div><div class="imp-cap">≈ / month</div>`
       : `<div class="imp-num" style="color:var(--ink-3);font-size:12px;font-weight:640">${r.impactCap||''}</div>`;
-    return `<div class="rec" style="--tier-col:var(${r.tierCol})">
+    const fixCode = r.fix || r.code;
+    return `<div class="rec${r.applied?' rec-applied':''}" style="--tier-col:var(${r.tierCol})">
       <div class="r-head">
         <div class="r-title">${r.title}</div>
-        <div class="r-impact">${impBlock}</div>
+        <div class="r-impact">${r.applied?'<div class="imp-num" style="color:var(--good);font-size:13px;font-weight:640">✓ applied</div>':impBlock}</div>
       </div>
-      <div class="r-body">${r.body}</div>
+      <div class="r-body">${r.applied&&r.appliedNote?r.appliedNote:r.body}</div>
       <div class="r-tags">
         <span class="tag ${kCls}">${kLbl}</span>
         <span class="tag ${eCls}">${eLbl}</span>
         ${r.proj?`<span class="tag eff-proj">${r.proj}</span>`:''}
       </div>
-      ${r.code?`<details><summary>Show snippet</summary><pre>${r.code}</pre></details>`:''}
+      ${fixCode&&!r.applied?`<details><summary>Fix</summary><pre>${fixCode}</pre>${r.verify?`<div class="r-verify"><b>Verify:</b> ${r.verify}</div>`:''}</details>`:''}
+      <div class="r-foot">
+        ${r.docs?`<a class="r-docs" href="${r.docs}" target="_blank" rel="noopener noreferrer">Learn more ↗</a>`:'<span></span>'}
+        ${r.id?`<button class="r-dismiss" onclick="dismissRec('${r.id}')" title="Hide this recommendation">dismiss</button>`:''}
+      </div>
     </div>`;
   }).join("");
+  const hiddenCount = recs.filter(r=>r.id && dismissed.has(r.id)).length;
+  if(hiddenCount){
+    list.innerHTML += `<div class="r-restore">${hiddenCount} dismissed · <button onclick="restoreRecs()">restore all</button></div>`;
+  }
 }
 
 /* ---------- orchestration ---------- */
