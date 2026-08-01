@@ -24,7 +24,7 @@ const server = createServer(async (req, res) => {
     if (rel === "/") rel = "/index.html";
     // data files resolve from HOME first (falling back to the package for the
     // bundled sample); everything else is served from the package root.
-    const isData = rel === "/data.json" || rel.startsWith("/snapshots/");
+    const isData = /^\/data(\.[a-z]+)?\.json$/.test(rel) || rel.startsWith("/snapshots/");
     const bases = isData && HOME !== ROOT ? [HOME, ROOT] : [ROOT];
     let body = null, ext = "." + rel.split(".").pop();
     for (const base of bases) {

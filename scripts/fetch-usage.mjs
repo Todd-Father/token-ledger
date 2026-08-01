@@ -439,6 +439,18 @@ const shortWs = (id) => (typeof id === "string" && id.length > 16 ? id.slice(0, 
 /* ============================================================
    MAIN
    ============================================================ */
+/* Write the payload twice: data.json is the "active view" the dashboard loads
+ * first, and data.<source>.json is the per-source copy that survives the next
+ * fetch of a *different* source — that's what lets the page offer a switcher
+ * (and the API-vs-Claude-Code comparison) without re-fetching. */
+const SOURCE_FILE = { live: "data.api.json", "claude-code": "data.code.json" };
+async function writeData(outPath, payload) {
+  const json = JSON.stringify(payload);
+  await writeFile(outPath, json);
+  const perSource = SOURCE_FILE[payload.source];
+  if (perSource) await writeFile(join(HOME, perSource), json);
+}
+
 async function writeFixture(outPath) {
   const fixture = await readFile(join(ROOT, "sample.data.json"), "utf8");
   const parsed = JSON.parse(fixture);
@@ -480,7 +492,7 @@ async function main() {
         console.warn("⚠ Found session files but no usage inside this window. Nothing written.");
         return;
       }
-      await writeFile(outPath, JSON.stringify(data));
+      await writeData(outPath, data);
       // No invoice exists for subscription usage — anomaly/history run on the
       // list-price estimate instead of billed cost.
       checkSpendAnomaly({ days: data.days.map((d) => ({ ...d, actualCostDay: d.estCostDay })) });
@@ -515,7 +527,7 @@ async function main() {
       console.warn("  Check the date range, or that this org has API traffic.");
       return;
     }
-    await writeFile(outPath, JSON.stringify(data));
+    await writeData(outPath, data);
     checkPriceAccuracy(data);
     checkSpendAnomaly(data);
     await updateHistory(data);

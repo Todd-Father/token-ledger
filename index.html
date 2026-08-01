@@ -422,6 +422,22 @@
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
   }
+/* ---- source switcher + comparison strip ---- */
+.src-switch{ display:inline-flex; gap:2px; padding:2px; border:1px solid var(--line-soft); border-radius:9px; margin-right:8px; }
+.src-switch button{ font:inherit; font-size:11.5px; font-weight:600; color:var(--ink-3); background:none; border:none;
+  padding:4px 10px; border-radius:7px; cursor:pointer; white-space:nowrap; }
+.src-switch button:hover{ color:var(--ink-1); }
+.src-switch button[aria-pressed="true"]{ background:var(--bg-1); color:var(--ink-1); box-shadow:0 1px 2px rgba(0,0,0,.06); }
+.cmp{ display:flex; flex-wrap:wrap; align-items:stretch; gap:0; border:1px solid var(--line-soft); border-radius:12px;
+  overflow:hidden; margin-bottom:14px; background:var(--bg-1); }
+.cmp-side{ flex:1 1 220px; padding:12px 16px; }
+.cmp-side + .cmp-side{ border-left:1px solid var(--line-soft); }
+.cmp-lbl{ font-size:10.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); }
+.cmp-val{ font-size:22px; font-weight:680; letter-spacing:-.01em; margin:2px 0 1px; }
+.cmp-sub{ font-size:11.5px; color:var(--ink-3); }
+.cmp-note{ flex:1 1 100%; border-top:1px solid var(--line-soft); padding:9px 16px; font-size:11.5px; color:var(--ink-3); line-height:1.5; }
+.cmp-note b{ color:var(--ink-2); font-weight:640; }
+
 /* ---- rec assumptions ---- */
 .act-assume{ margin:10px 0 4px; border:1px solid var(--line-soft); border-radius:10px; padding:8px 12px; }
 .act-assume summary{ cursor:pointer; font-size:12px; font-weight:600; color:var(--ink-2); }
@@ -450,6 +466,10 @@
       </div>
     </div>
     <div class="mode-toggle">
+      <div class="src-switch" id="srcSwitch" role="group" aria-label="Data source" hidden>
+        <button data-src="live" aria-pressed="false">Claude API</button>
+        <button data-src="claude-code" aria-pressed="false">Claude Code</button>
+      </div>
       <span class="badge-mock" id="srcBadge" title="Numbers are synthetic and match the real API schema. Run scripts/fetch-usage.mjs with an Admin key to go live.">Demo data</span>
       <button class="tbtn" id="themeBtn" aria-label="Toggle color theme">
         <span id="themeIcon">◐</span><span id="themeTxt">Theme</span>
@@ -527,6 +547,9 @@
       </div>
     </div>
   </div>
+
+  <!-- ============ BOTH-SOURCE COMPARISON (only when both exist) ============ -->
+  <div class="cmp" id="cmpStrip" hidden></div>
 
   <!-- ================= KPI STRIP ================= -->
   <div class="kpis" id="kpis"></div>
@@ -1831,9 +1854,14 @@ tbtn.addEventListener("click", ()=>{
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", ()=>{ if(!root.getAttribute("data-theme")) render(); });
 
 /* ---------- data source badge ---------- */
+const MAST_SUB_API = 'Claude API usage &amp; efficiency · <code>/v1/organizations/usage_report</code> + <code>/cost_report</code>';
 function setSourceBadge(src, generatedAt){
   const b=document.getElementById("srcBadge");
   if(!b) return;
+  // reset the subtitle each time — switching sources must not leave the
+  // previous source's wording in the masthead
+  const sub0=document.getElementById("mastSub");
+  if(sub0 && src!=="claude-code") sub0.innerHTML = MAST_SUB_API;
   if(src==="live"){
     b.textContent = "Live data";
     b.className="badge-mock badge-live";
@@ -1912,38 +1940,127 @@ function renderHistoryTrend(rows){
   });
 }
 
+// Guards against a slow history fetch landing after the user has already
+// switched sources — without it, the trend chart can show the other source's
+// history. Only the newest request is allowed to render.
+let HISTORY_REQ = 0;
 async function loadHistory(src){
   // each data source accumulates its own history file — billed cost for the
   // Admin API, list-price estimate for Claude Code
   const file = src==="claude-code" ? "./snapshots/history-code.jsonl" : "./snapshots/history.jsonl";
+  const token = ++HISTORY_REQ;
   try{
     const res = await fetch(file, { cache:"no-store" });
+    if(token !== HISTORY_REQ) return;            // superseded by a later switch
     if(!res.ok) return renderHistoryTrend(null);
     const text = await res.text();
+    if(token !== HISTORY_REQ) return;
     const rows = text.split("\n").filter(l=>l.trim()).map(l=>{ try{ return JSON.parse(l); }catch{ return null; } }).filter(Boolean);
     renderHistoryTrend(rows);
-  }catch(e){ renderHistoryTrend(null); }
+  }catch(e){ if(token === HISTORY_REQ) renderHistoryTrend(null); }
 }
 
-async function bootstrap(){
+/* ---------- multi-source loading ----------
+   Every fetch writes data.json (the active view) plus a per-source copy
+   (data.api.json / data.code.json). When both copies exist the page offers a
+   switcher and the side-by-side comparison — without ever summing the two,
+   because billed dollars and subscription list-price value are different
+   units (see the strip's own note). */
+const SOURCES = {};          // "live" | "claude-code" -> payload
+const SRC_PREF_KEY = "ledger-source";
+
+function prepPayload(json){
+  if(!json || !Array.isArray(json.days) || !json.days.length) return null;
+  // Tag each project row with its day's date so projDayCost can price each
+  // day at the rate that applied on it.
+  for(const day of json.days){
+    for(const pd of (day.projs || [])) pd._date = day.date;
+  }
+  return json;
+}
+
+async function fetchJSON(path){
   try{
-    const res = await fetch("./data.json", { cache: "no-store" });
-    if(res.ok){
-      const json = await res.json();
-      if(json && Array.isArray(json.days) && json.days.length){
-        // Tag each project row with its day's date so projDayCost can pick the
-        // price that applied ON that day (Sonnet 5 changes price 2026-09-01).
-        for(const day of json.days){
-          for(const pd of (day.projs || [])) pd._date = day.date;
-        }
-        DATA = json;
-        setSourceBadge(json.source || "live", json.generatedAt);
-        render();
-        loadHistory(json.source || "live");
-        return;
-      }
-    }
-  }catch(e){ /* file:// or missing data.json — expected; use synthetic */ }
+    const res = await fetch(path, { cache:"no-store" });
+    if(!res.ok) return null;
+    return prepPayload(await res.json());
+  }catch{ return null; }
+}
+
+// Total cost for a payload: billed where it exists, list-price estimate otherwise.
+function payloadTotal(p){
+  return p.days.reduce((s,d)=> s + (d.actualCostDay ?? d.estCostDay ?? 0), 0);
+}
+
+function renderComparison(){
+  const strip = document.getElementById("cmpStrip");
+  const api = SOURCES["live"], code = SOURCES["claude-code"];
+  if(!api || !code){ strip.hidden = true; return; }
+  strip.hidden = false;
+
+  const apiTot = payloadTotal(api), codeTot = payloadTotal(code);
+  const ratio = apiTot > 0 ? codeTot/apiTot : 0;
+  const span = p => `${p.DAYS}d · ${p.days[0].date} → ${p.days[p.days.length-1].date}`;
+
+  strip.innerHTML = `
+    <div class="cmp-side">
+      <div class="cmp-lbl">Claude API · billed</div>
+      <div class="cmp-val">${fmt$(apiTot)}</div>
+      <div class="cmp-sub">${span(api)}</div>
+    </div>
+    <div class="cmp-side">
+      <div class="cmp-lbl">Claude Code · list-price value</div>
+      <div class="cmp-val">${fmt$(codeTot)}</div>
+      <div class="cmp-sub">${span(code)}</div>
+    </div>
+    <div class="cmp-note">
+      These are <b>different units and are never added together</b>: the API figure is money actually
+      billed; the Claude Code figure is what the same tokens would have cost at list price — your
+      subscription is flat-rate, so you were never charged it.
+      ${ratio > 1.5 ? `Your Claude Code work is delivering roughly <b>${ratio.toFixed(0)}×</b> the token
+      value of your API spend over these windows.` : ``}
+      Windows differ, so compare rates rather than totals.
+    </div>`;
+}
+
+function applySource(src){
+  const payload = SOURCES[src];
+  if(!payload) return;
+  DATA = payload;
+  try{ localStorage.setItem(SRC_PREF_KEY, src); }catch{}
+  document.querySelectorAll("#srcSwitch button").forEach(b=>
+    b.setAttribute("aria-pressed", b.dataset.src===src ? "true" : "false"));
+  setSourceBadge(src, payload.generatedAt);
+  render();
+  loadHistory(src);
+}
+
+document.getElementById("srcSwitch").addEventListener("click", e=>{
+  const b = e.target.closest("button");
+  if(b) applySource(b.dataset.src);
+});
+
+async function bootstrap(){
+  // The active file tells us which source was fetched last; the per-source
+  // copies let us offer the switcher and comparison.
+  const [active, api, code] = await Promise.all([
+    fetchJSON("./data.json"), fetchJSON("./data.api.json"), fetchJSON("./data.code.json"),
+  ]);
+  if(api) SOURCES["live"] = api;
+  if(code) SOURCES["claude-code"] = code;
+  // Fold the active payload in too — covers a data.json written before
+  // per-source files existed, and keeps the fixture case working.
+  if(active && !SOURCES[active.source]) SOURCES[active.source] = active;
+
+  renderComparison();
+  const both = SOURCES["live"] && SOURCES["claude-code"];
+  document.getElementById("srcSwitch").hidden = !both;
+
+  let pick = null;
+  try{ pick = localStorage.getItem(SRC_PREF_KEY); }catch{}
+  if(!both || !SOURCES[pick]) pick = (active && SOURCES[active.source]) ? active.source : Object.keys(SOURCES)[0];
+
+  if(pick && SOURCES[pick]){ applySource(pick); return; }
   setSourceBadge("fixture");
   render();
   loadHistory("fixture");

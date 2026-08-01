@@ -153,6 +153,30 @@ test("recs rank dollar-quantified items first", () => {
     "every $-quantified rec should sort before qualitative ones");
 });
 
+test("payloadTotal uses billed cost when present and the estimate otherwise", () => {
+  vm.runInContext(`
+    __out.billed = payloadTotal({ days: [
+      { actualCostDay: 10, estCostDay: 99 }, { actualCostDay: 5, estCostDay: 99 } ] });
+    __out.est = payloadTotal({ days: [
+      { actualCostDay: null, estCostDay: 7 }, { actualCostDay: null, estCostDay: 3 } ] });
+    __out.mixed = payloadTotal({ days: [ { actualCostDay: 4 }, { estCostDay: 6 } ] });
+  `, ctx);
+  assert.equal(ctx.__out.billed, 15, "billed cost wins over the estimate");
+  assert.equal(ctx.__out.est, 10);
+  assert.equal(ctx.__out.mixed, 10);
+});
+
+test("the comparison never sums the two sources", () => {
+  // Guard against a future refactor quietly adding billed $ to list-price value.
+  const html = readFileSync(join(ROOT, "index.html"), "utf8");
+  const start = html.indexOf("function renderComparison");
+  const body = html.slice(start, html.indexOf("\n}", start));
+  assert.ok(body.includes("apiTot") && body.includes("codeTot"), "should read both totals");
+  assert.ok(!/apiTot\s*\+\s*codeTot|codeTot\s*\+\s*apiTot/.test(body),
+    "must never add billed dollars to subscription list-price value");
+  assert.ok(body.includes("never added together"), "should state the units differ");
+});
+
 test("Claude Code data suppresses per-token billing recs that don't apply to subscriptions", () => {
   const api = runRecs();
   assert.ok(api.recs.some((r) => r.id === "batch-tier"), "batch rec should fire for API data");

@@ -73,6 +73,22 @@ npm start        # fetch + serve; then open http://localhost:4319
 Force one with `npm run fetch:code` (or `--claude-code`) and `npm run
 fetch:fixture` (or `--fixture`).
 
+**Run both and you get both.** Each fetch also saves a per-source copy
+(`data.api.json` / `data.code.json`), so once you've run `npm run fetch` *and*
+`npm run fetch:code`, the dashboard shows a **source switcher** in the header
+and a comparison strip at the top:
+
+```
+Claude API · billed          Claude Code · list-price value
+$91                          $3.3k
+90d · 2026-05-03 → 07-31     40d · 2026-05-24 → 08-01
+```
+
+The two figures are **never added together** — one is money actually billed,
+the other is what your flat-rate subscription's tokens would have cost at list
+price. Seen side by side they answer a question neither source can alone: how
+much leverage you're getting out of each.
+
 > Running via `npx`? Your data lives in `~/.token-ledger` (override with
 > `LEDGER_HOME`), so it survives npm cache cleanups — put your `.env` there
 > too. From a clone, everything stays in the repo directory.
