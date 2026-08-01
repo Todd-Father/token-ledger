@@ -8,15 +8,8 @@
 import { writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { PRICE, PRICE_META } from "./lib/pricing.mjs";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-
-// $/Mtok — verified 2026-07-31 against https://platform.claude.com/docs (Pricing)
-const PRICE = {
-  "claude-opus-4-8":  { in: 5,  read: 0.50, write: 6.25,  out: 25 },
-  "claude-sonnet-5":  { in: 3,  read: 0.30, write: 3.75,  out: 15 },
-  "claude-haiku-4-5": { in: 1,  read: 0.10, write: 1.25,  out: 5 },
-  "claude-fable-5":   { in: 10, read: 1.00, write: 12.50, out: 50 },
-};
 const PROJECTS = [
   { id: "wrkspc_01example01", name: "web-app", color: "#c1852c", weight: 0.34, model: "claude-sonnet-5", cacheAff: 0.78, ioBias: 0.55 },
   { id: "wrkspc_01example02", name: "agent-service", color: "#2f8f6e", weight: 0.11, model: "claude-opus-4-8", cacheAff: 0.62, ioBias: 0.70 },
@@ -80,7 +73,7 @@ function buildData() {
     const drift = 1 + 0.08 + r() * 0.05;
     days.push({ dayIndex: d, weekday, projs, actualCostDay: +(estDay * drift).toFixed(2) });
   }
-  return { days, DAYS, source: "fixture" };
+  return { days, DAYS, source: "fixture", prices: PRICE, priceMeta: PRICE_META };
 }
 const data = buildData();
 await writeFile(join(ROOT, "sample.data.json"), JSON.stringify(data));

@@ -119,6 +119,11 @@ surfaces the levers that apply, ranked by estimated dollar impact. Covers API co
 levers (caching, batch tier, model right-sizing), response-quality levers, Claude Code
 skills/workflow, and governance (spend alerts, per-workspace chargeback).
 
+The dollar figures are **estimates, not measurements** — each quantified card states
+the assumption it leans on (e.g. "assumes 55% of fresh input can become cache reads"),
+and an **Assumptions** panel in that section lets you tune every constant to match
+your own workloads. Figures recompute instantly; your settings persist locally.
+
 ### Knobs
 
 - **Window:** 30 / 60 / 90 days
@@ -148,9 +153,12 @@ every efficiency meter. The dashboard recomputes cost from tokens (using the pri
 `fetch-usage.mjs`) so the caching/tier toggles can show live counterfactuals; the
 authoritative Cost API figure is also stored per project-day for reconciliation.
 
-> **Pricing note:** the per-model prices live in one place — the `PRICE` map in
-> `scripts/fetch-usage.mjs` (and mirrored in `index.html`). Update them if Anthropic's
-> pricing changes or if you use models not listed.
+> **Pricing note:** per-model prices live in one place — `scripts/lib/pricing.mjs`,
+> with per-version entries (Opus 4.1 is priced 3× Opus 4.8, old Haiku differs from
+> new, etc.). Every fetch embeds the table into `data.json`, so the dashboard prices
+> live data from the same numbers, and a reconcile canary warns on every fetch if
+> they drift from your real bill. `index.html` keeps a small inline fallback for the
+> offline demo — CI fails if it drifts from `pricing.mjs`.
 
 ---
 
@@ -175,6 +183,21 @@ fetch on a cadence — once daily is plenty:
   fonts, or trackers) — everything is inline. It works fully offline once served.
 - Treat the Admin key like a password: it can read your whole org's usage and cost.
   Scope it to read-only if your org supports scoped Admin keys.
+
+---
+
+## Tests
+
+```bash
+npm test          # node's built-in test runner — no dependencies
+```
+
+Covers the money math end to end: price normalization (dated model ids → versioned
+rates), the API-bucket fold (tokens→millions, cents→dollars, dev/prod and tier
+splits), the price-drift canary, spend-anomaly detection, the recommendation engine
+(triggering, assumption scaling, billed-dollar reconciliation), and a parity check
+that fails if the dashboard's inline price fallback drifts from `scripts/lib/pricing.mjs`.
+CI runs the suite plus a no-key fixture smoke test on every push.
 
 ---
 

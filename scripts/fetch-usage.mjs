@@ -16,8 +16,9 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
+import { PRICE, PRICE_META, normalizeModel, priceFor } from "./lib/pricing.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
@@ -44,44 +45,12 @@ const opt = (name, def) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : def;
 };
 
-/* ---------- pricing (per Mtok, USD) — keep in sync with the dashboard ----------
- * Source: https://platform.claude.com/docs (Pricing). Last verified: 2026-07-31.
- * NOTE: Sonnet 5 pricing RISES on 2026-09-01 ($2→$3 in, $10→$15 out, etc.).
- * priceFor(model, dateStr) handles that switch per-day automatically.
- * The reconcile check in main() warns if these numbers drift from real billing.
+/* ---------- pricing ----------
+ * All per-model rates live in scripts/lib/pricing.mjs (the single source of
+ * truth). The full table is embedded into data.json (`prices`) so the
+ * dashboard prices live data from the same numbers. The reconcile check in
+ * main() warns if those numbers drift from real billing.
  */
-const PRICE = {
-  "claude-opus-4-8":  { in: 5,  read: 0.50, write: 6.25,  out: 25 },
-  "claude-sonnet-5":  { in: 3,  read: 0.30, write: 3.75,  out: 15 }, // billing-verified 2026-07-31
-  "claude-haiku-4-5": { in: 1,  read: 0.10, write: 1.25,  out: 5  },
-  "claude-fable-5":   { in: 10, read: 1.00, write: 12.50, out: 50 },
-};
-const PRICE_SONNET5_FROM_SEPT2026 = { in: 3, read: 0.30, write: 3.75, out: 15 };
-const SONNET5_PRICE_CHANGE = "2026-09-01";
-// Date-aware lookup. dateStr is "YYYY-MM-DD" (a day bucket); omit for "today".
-function priceFor(model, dateStr) {
-  const norm = normalizeModel(model);
-  if (norm === "claude-sonnet-5") {
-    const d = dateStr || new Date().toISOString().slice(0, 10);
-    if (d >= SONNET5_PRICE_CHANGE) return PRICE_SONNET5_FROM_SEPT2026;
-  }
-  return PRICE[norm] || PRICE["claude-sonnet-5"];
-}
-const _warnedModels = new Set();
-function normalizeModel(m) {
-  if (!m) return "claude-sonnet-5";
-  const s = m.toLowerCase();
-  if (s.includes("fable")) return "claude-fable-5";
-  if (s.includes("opus")) return "claude-opus-4-8";
-  if (s.includes("haiku")) return "claude-haiku-4-5";
-  if (s.includes("sonnet")) return "claude-sonnet-5";
-  if (!_warnedModels.has(m)) {
-    _warnedModels.add(m);
-    console.warn(`⚠ Unknown model "${m}" — no price on file; using Sonnet pricing as a guess.`);
-    console.warn(`  Add it to PRICE in scripts/fetch-usage.mjs AND index.html for accurate costs.`);
-  }
-  return m;
-}
 
 /* ---------- palette assignment for projects (stable by name) ---------- */
 const PALETTE = ["#c1852c", "#2f8f6e", "#2f6f8f", "#9a5bc4", "#c9524f", "#4a9d7f", "#d98b4a", "#7c6ff0"];
@@ -224,6 +193,12 @@ async function fetchLive(days) {
     group_by: ["workspace_id", "description"],
   });
 
+  return buildDays({ usage, cost, wsNameMap, keyNameMap });
+}
+
+// Pure fold: raw API buckets -> the normalized {days, DAYS} shape the
+// dashboard reads. Exported for tests; fetchLive() is just fetch + this.
+export function buildDays({ usage, cost, wsNameMap = new Map(), keyNameMap = new Map() }) {
   // ---- index cost by day+workspace, and by day, for reconciliation ----
   // The Cost API `amount` is USD in CENTS (a decimal string, e.g. "452.79" = $4.53).
   // Verified empirically: 1.3M tokens over 7 days priced ~$4.53 by hand vs the API's
@@ -335,7 +310,8 @@ async function fetchLive(days) {
              actualCostDay: costByDay.get(day) ?? null };
   });
 
-  return { days: outDays, DAYS: outDays.length, source: "live", generatedAt: new Date().toISOString() };
+  return { days: outDays, DAYS: outDays.length, source: "live", generatedAt: new Date().toISOString(),
+           prices: PRICE, priceMeta: PRICE_META };
 }
 
 /* ============================================================
@@ -345,7 +321,7 @@ async function fetchLive(days) {
    If they diverge beyond tolerance, the PRICE map is stale — warn loudly.
    This is what keeps the dashboard honest when Anthropic changes prices.
    ============================================================ */
-function checkPriceAccuracy(data, tolerancePct = 20) {
+export function computePriceDrift(data, tolerancePct = 20) {
   let recomputed = 0;
   let billed = 0;
   for (const day of data.days) {
@@ -363,19 +339,24 @@ function checkPriceAccuracy(data, tolerancePct = 20) {
           p.tok.output * pr.out) * tierMul;
     }
   }
-  if (billed < 0.01) return; // nothing meaningful to compare
+  if (billed < 0.01) return { comparable: false, ok: true, driftPct: 0, recomputed, billed };
   const driftPct = Math.abs(recomputed - billed) / billed * 100;
-  if (driftPct > tolerancePct) {
+  return { comparable: true, ok: driftPct <= tolerancePct, driftPct, recomputed, billed, tolerancePct };
+}
+
+function checkPriceAccuracy(data, tolerancePct = 20) {
+  const r = computePriceDrift(data, tolerancePct);
+  if (!r.comparable) return; // nothing meaningful to compare
+  if (!r.ok) {
     console.warn("");
-    console.warn(`⚠ PRICE MAP DRIFT DETECTED: recomputed cost ($${recomputed.toFixed(2)}) differs from`);
-    console.warn(`  billed cost ($${billed.toFixed(2)}) by ${driftPct.toFixed(0)}% (tolerance ${tolerancePct}%).`);
-    console.warn(`  Anthropic's prices have likely changed. Update the PRICE map in BOTH:`);
-    console.warn(`    • scripts/fetch-usage.mjs`);
-    console.warn(`    • index.html`);
+    console.warn(`⚠ PRICE MAP DRIFT DETECTED: recomputed cost ($${r.recomputed.toFixed(2)}) differs from`);
+    console.warn(`  billed cost ($${r.billed.toFixed(2)}) by ${r.driftPct.toFixed(0)}% (tolerance ${tolerancePct}%).`);
+    console.warn(`  Anthropic's prices have likely changed. Update the PRICE map in:`);
+    console.warn(`    • scripts/lib/pricing.mjs  (single source — data.json embeds it)`);
     console.warn(`  Current rates: https://platform.claude.com/docs (Pricing)`);
     console.warn("");
   } else {
-    console.log(`✓ Price check: recomputed cost within ${driftPct.toFixed(1)}% of billed — PRICE map looks accurate.`);
+    console.log(`✓ Price check: recomputed cost within ${r.driftPct.toFixed(1)}% of billed — PRICE map looks accurate.`);
   }
 }
 
@@ -384,21 +365,26 @@ function checkPriceAccuracy(data, tolerancePct = 20) {
    trailing 7-day average; >3x (with a $1 floor) or over LEDGER_ALERT_USD
    from .env fires a warning + macOS notification. Local math only; free.
    ============================================================ */
-function checkSpendAnomaly(data) {
+export function detectSpendAnomaly(data, { todayKey, absLimit = 0 } = {}) {
   const days = data.days.filter((d) => d.actualCostDay != null);
-  if (days.length < 3) return;
-  const todayKey = new Date().toISOString().slice(0, 10);
+  if (days.length < 3) return null;
+  todayKey = todayKey || new Date().toISOString().slice(0, 10);
   const complete = days.filter((d) => d.date < todayKey);
-  if (complete.length < 3) return;
+  if (complete.length < 3) return null;
   const latest = complete[complete.length - 1];
   const trailing = complete.slice(-8, -1);
   const avg = trailing.reduce((s, d) => s + d.actualCostDay, 0) / trailing.length;
-  const absLimit = Number(process.env.LEDGER_ALERT_USD || 0);
   const spiked = (latest.actualCostDay > Math.max(1, avg * 3)) ||
                  (absLimit > 0 && latest.actualCostDay > absLimit);
-  if (!spiked) return;
-  const msg = "Claude spend spike: $" + latest.actualCostDay.toFixed(2) + " on " + latest.date +
-              " (trailing avg $" + avg.toFixed(2) + "/day)";
+  if (!spiked) return null;
+  return { latest, avg };
+}
+
+function checkSpendAnomaly(data) {
+  const hit = detectSpendAnomaly(data, { absLimit: Number(process.env.LEDGER_ALERT_USD || 0) });
+  if (!hit) return;
+  const msg = "Claude spend spike: $" + hit.latest.actualCostDay.toFixed(2) + " on " + hit.latest.date +
+              " (trailing avg $" + hit.avg.toFixed(2) + "/day)";
   console.warn("");
   console.warn(`🚨 SPEND ANOMALY: ${msg}`);
   console.warn("   Open the dashboard and check which project/model drove it.");
@@ -468,6 +454,8 @@ async function main() {
     const parsed = JSON.parse(fixture);
     parsed.source = "fixture";
     parsed.generatedAt = new Date().toISOString();
+    parsed.prices = parsed.prices || PRICE;
+    parsed.priceMeta = parsed.priceMeta || PRICE_META;
     await writeFile(outPath, JSON.stringify(parsed));
     console.log(`✓ Wrote ${outPath} (${parsed.DAYS} days, sample data).`);
     console.log("  Open index.html to view.");
@@ -500,9 +488,15 @@ async function main() {
     const fixture = JSON.parse(await readFile(join(ROOT, "sample.data.json"), "utf8"));
     fixture.source = "fixture";
     fixture.generatedAt = new Date().toISOString();
+    fixture.prices = fixture.prices || PRICE;
+    fixture.priceMeta = fixture.priceMeta || PRICE_META;
     await writeFile(outPath, JSON.stringify(fixture));
     process.exitCode = 1;
   }
 }
 
-main();
+// Run only when executed directly (node scripts/fetch-usage.mjs), not when
+// imported by the test suite.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}
